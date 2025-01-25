@@ -1,0 +1,38 @@
+#!/usr/bin/gnuplot
+# 23. Januar 2024 -- generate a sinusoidal pattern with gimp
+
+
+#reset
+set terminal x11
+
+xl=0; xh=1; yl=-1; yh=1;
+eps=0.01;
+rx=0.6; ry=0.8; kw=0.35; kh=0.15
+lh=0.06; al=0.1
+
+
+N = 100 # number of black lines
+Nsamples=N*256
+
+
+set samples Nsamples
+set table 'shadowkey.dat'
+#splot [xl:xh] [yl:yh] x/(xh-xl) # original
+splot [xl:xh] [yl:yh] cos( (N * 2 * pi * x/(xh-xl)))
+unset table
+unset colorbox
+unset key
+unset xtics
+unset ytics
+set border 0
+set palette defined (0 "#000000", 1 "#ffffff")
+plot [xl:xh] [yl:yh] 'shadowkey.dat' w ima
+pause -1
+
+set terminal svg
+set output "sinusoid.svg"
+replot
+
+set terminal pdf size 10cm,6.2cm
+set output "sinusoid.pdf" 
+replot

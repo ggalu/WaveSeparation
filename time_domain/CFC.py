@@ -2,7 +2,7 @@
 # @Author: Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
 # @Date:   2024-12-09 08:20:48
 # @Last Modified by:   Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
-# @Last Modified time: 2024-12-09 15:13:01
+# @Last Modified time: 2025-01-24 11:27:25
 
 """
 Apply the wave separation technique of 
@@ -111,7 +111,7 @@ class solveCFC:
         self.c0 = 5091.750772173155
 
         self.read_file(filename)
-        if True:
+        if False:
             self.calculate_F_G_FrequencyDomain()
             self.resolveAtDistanceFrequencyDomain(-1500.0)
         else:
@@ -283,6 +283,6 @@ class solveCFC:
         for ax in axs:
             ax.label_outer()
     
-A = BarMeasurement("CFC.dat")
+#A = BarMeasurement("CFC.dat")
 
-#solver = solveCFC("CFC.dat")
+solver = solveCFC("CFC.dat")
