@@ -2,11 +2,12 @@
 # @Author: Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
 # @Date:   2025-01-24 16:35:10
 # @Last Modified by:   Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
-# @Last Modified time: 2025-01-24 20:27:42
+# @Last Modified time: 2025-01-25 17:07:26
 
 import numpy as np
 import matplotlib.pyplot as plt
 import viz_tools    #self-developed module that groups animation functions
+from progressbar import progressbar
 
 class SimulateSymmpact:
     def __init__(self):
@@ -29,7 +30,7 @@ class SimulateSymmpact:
         self.rho = 2.7e-6
         self.diameter_bar = 40.0
         self.A_bar = 0.25 * np.pi * self.diameter_bar**2
-        self.damping = 0.02
+        self.damping = 0.01
         self.initial_velocity = 5.0
         self.N_cycles = 4 # simulate this many wave-pingpongs in a bar
 
@@ -59,7 +60,7 @@ class SimulateSymmpact:
         print("specimen cross section area:", self.specimen_cross_section_area)
         print("bar cross section area:", self.A_bar)
         print("rho * c0 * Up:", 0.5 * self.rho * self.c0 * self.initial_velocity)
-        for i in range(self.num_timesteps):
+        for i in progressbar(range(self.num_timesteps)):
 
             # 1st part of leapfrog: update velocities half-step using old accelerations
             self.v +=  0.5 * self.f * self.dt / self.nodal_mass
@@ -76,6 +77,10 @@ class SimulateSymmpact:
 
             # now, overwrite stress for the specimen elements only
             stress[self.specimenIndices] = self.computeStressStrainSpecimen(dx[self.specimenIndices])
+
+            # enforce no-tension condition on specimen interface elements of both bars
+            stress[self.inputBarIndices[-1]] = min(stress[self.inputBarIndices[-1]], 0.0)
+            stress[self.outputBarIndices[0]] = min(stress[self.outputBarIndices[0]], 0.0)
 
             # add artificial viscosity
             dv = self.v[1:] - self.v[0:-1]
@@ -115,7 +120,7 @@ class SimulateSymmpact:
         for i in range(len(eps)): # compression
             if stress[i] < -yield_stress[i]:
                 dsig = stress[i] + yield_stress[i] # stress is outside of yield surface by this amount
-                print(f"negative beyond :: stress={stress[i]}, yield stress={yield_stress[i]}, delta={dsig}")
+                #print(f"negative beyond :: stress={stress[i]}, yield stress={yield_stress[i]}, delta={dsig}")
                 stress[i] = -yield_stress[i]
                 #print("negative beyond yield stress by delta: ", dsig)
                 deps = dsig / self.E_bar

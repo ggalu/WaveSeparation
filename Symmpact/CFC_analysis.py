@@ -2,7 +2,7 @@
 # @Author: Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
 # @Date:   2024-12-09 08:20:48
 # @Last Modified by:   Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
-# @Last Modified time: 2025-01-25 14:28:30
+# @Last Modified time: 2025-01-25 16:59:26
 
 """
 Apply the wave separation technique of 
@@ -25,7 +25,7 @@ class solveCFC:
         self.A_bar = 0.25 * np.pi * 40**2
         self.c0 = np.sqrt(self.E_bar/self.rho)
         self.L0 = 10.0 # specimen length
-        self.alpha = 0.0
+        self.alpha = 1.0e-12 #-1.2e-5
 
         self.specimen_diameter = 10.0
         self.JC_A = 0.08 # Johnson-Cook A
@@ -36,11 +36,10 @@ class solveCFC:
         self.read_file(filename)
         #self.read_specimen()
         
+        self.calculate_F_G_unshifted()
         if True:
-            self.calculate_F_G_FrequencyDomain()
             self.resolveAtDistanceFrequencyDomain(130.0, -130.0)
         else:
-            self.calculate_F_G_TimeDomain()
             self.resolveAtDistanceTimeDomain(130.0, -130.0)
         
 
@@ -89,106 +88,61 @@ class solveCFC:
 
         print("shifting distance d:", dA, dB)
 
-        # do strain gauge A
-        # shift F (e -gamma d) and G (e gamma d) in frequency space
-        FAws = self.FAw * np.exp( self.gamma * dA)
-        GAws = self.GAw * np.exp(-self.gamma * dA)
+        def shift_P(Fw, Gw, d):
+            """
+            Shift the sum of F and G by d.
+            Do this by propagating the sum of the Fourier transforms F(w) and G(w).
+            Return the inverse transform, i.e., the time-domain signal of the force P(t)
+            """
 
-        self.FA_shifted = np.fft.irfft(FAws)
-        self.GA_shifted = np.fft.irfft(GAws)
+            bracket = Fw * np.exp(self.gamma * d) + Gw * np.exp(-self.gamma * d)
+            prefactor = -self.rho * (self.w**2 / (self.gamma**2)) * self.A_bar
 
-        # after shifting, we can have lost the DC offset, initial value at t=0 is zero. recover this.
-        #self.FA_shifted -= self.FA_shifted[0]
-        #self.GA_shifted -= self.GA_shifted[0]
-
-
-
-        Pw_shifted    = -self.rho * (self.w**2 / (self.gamma**2)) * (FAws    + GAws)    * self.A_bar
-        Pw_shifted[0] =  self.rho * (self.c0**2)                  * (FAws[0] + GAws[0]) * self.A_bar
-        self.PA_shifted = np.fft.irfft(Pw_shifted)
+            return np.fft.irfft(prefactor * bracket)
         
-        print(f"offset in PA_shifted is:", self.PA_shifted[0])
-        #self.PA_shifted -= self.PA_shifted[0]
+        def shift_v(Fw, Gw, d):
+            """
+            Shift the difference of F and G by d.
+            Do this by propagating the difference of the Fourier transforms F(w) and G(w).
+            Return the inverse transform, i.e., the time-domain signal of the velocity v(t)
+            """
 
-        vw_shifted = 1.0j * (self.w / self.gamma) * (FAws - GAws)
-        vw_shifted[0] = self.c0 * (FAws[0] - GAws[0])
-        self.vA_shifted = -np.fft.irfft(vw_shifted)
-        #self.vA_shifted 
+            bracket = Fw * np.exp(-self.gamma * d) - Gw * np.exp(self.gamma * d)
+            prefactor = 1.0j * self.w / self.gamma
 
-        # do strain gauge B
-        # shift F (e -gamma d) and G (e gamma d) in frequency space
-        FBws = self.FBw * np.exp( self.gamma * dB)
-        GBws = self.GBw * np.exp(-self.gamma * dB)
+            return np.fft.irfft(prefactor * bracket)
 
-        self.FB_shifted = np.fft.irfft(FBws)
-        self.GB_shifted = np.fft.irfft(GBws)
 
-        Pw_shifted    = -self.rho * (self.w**2 / (self.gamma**2)) * (FBws    + GBws)    * self.A_bar
-        Pw_shifted[0] =  self.rho * (self.c0**2)                  * (FBws[0] + GBws[0]) * self.A_bar
-        self.PB_shifted = np.fft.irfft(Pw_shifted)
+        # forces
+        self.PA_shifted    = shift_P(self.FAw, self.GAw, dA)
+        self.PB_shifted    = shift_P(self.FBw, self.GBw, dB)
 
-        vw_shifted = 1.0j * (self.w / self.gamma) * (FBws - GBws)
-        vw_shifted[0] = self.c0 * (FBws[0] - GBws[0])
-        self.vB_shifted = -np.fft.irfft(vw_shifted)
+        self.PA_shifted -= self.PA_shifted[0] # restore DC component
+        self.PB_shifted -= self.PB_shifted[0]
 
-        #print("gamma:", self.gamma)
 
-    def calculate_F_G_FrequencyDomain(self):
+        # velocities
+        self.vA_shifted = shift_v(self.FAw, self.GAw, dA)
+        self.vB_shifted = shift_v(self.FBw, self.GBw, dB)
+
+
+    def calculate_F_G_unshifted(self):
         """
-        calculate the F(w) and G(w)
+        Calculate the unshifted F(w) and G(w) by doing Fourier transforms of the time-domain signals F(t) and G(t).
+        Unshifted means that they are calculated at the locations of the strain gauges.
         """
 
-        # strain gauge A
-        EPSA = np.fft.rfft(self.epsA)# * dt
-        VA = np.fft.rfft(self.velA)# * dt
-
-        self.FAw =    0.5 * (EPSA    - 1.0j * (self.gamma/self.w) * VA)
-        self.FAw[0] = 0.5 * (EPSA[0] - 1.0j * (1.0j/self.c0) * VA[0]) # need to handle w=0 separately, otherwise division by zero
-        self.FA = np.fft.irfft(self.FAw)
-        
-        self.GAw =    0.5 * (EPSA    + 1.0j * (self.gamma/self.w)      * VA)
-        self.GAw[0] = 0.5 * (EPSA[0] + 1.0j * (1.0j/self.c0) * VA[0])  # need to handle w=0 separately, otherwise division by zero
-        self.GA = np.fft.irfft(self.GAw)
-
-        
-
-
-        # strain gauge B
-        EPSB = np.fft.rfft(self.epsB)# * dt
-        VB = np.fft.rfft(self.velB)# * dt
-
-        self.FBw =    0.5 * (EPSB    - 1.0j * (self.gamma/self.w) * VB)
-        self.FBw[0] = 0.5 * (EPSB[0] - 1.0j * (1.0j/self.c0) * VB[0]) # need to handle w=0 separately, otherwise division by zero
-        self.FB = np.fft.irfft(self.FBw)
-        
-        self.GBw =    0.5 * (EPSB    + 1.0j * (self.gamma/self.w)      * VB)
-        self.GBw[0] = 0.5 * (EPSB[0] + 1.0j * (1.0j/self.c0) * VB[0])  # need to handle w=0 separately, otherwise division by zero
-        self.GB = np.fft.irfft(self.GBw)
-
-
-        # calculate Time Domain F, G for debugging
-        #self.FATD = 0.5 * (self.epsA + self.velA / self.c0)
-        #self.GATD = 0.5 * (self.epsA - self.velA / self.c0)
-
-        #plt.plot(self.t, self.FA, label="FA Fourier")
-        #plt.plot(self.t, self.GA, label="GA Fourier")
-        #plt.plot(self.t, self.FATD, label="FA TD")
-        #plt.plot(self.t, self.GATD, label="GA TD")
-        #plt.legend()
-        #plt.show()
-        #sys.exit()
-
-
-
-    def calculate_F_G_TimeDomain(self):
-        """
-        calculate the ascending wave F and the descending wave G for strain gauges A and B
-        """
         self.FA = 0.5 * (self.epsA + self.velA / self.c0)
         self.GA = 0.5 * (self.epsA - self.velA / self.c0)
+        self.FAw = np.fft.rfft(self.FA)
+        self.GAw = np.fft.rfft(self.GA)
 
         self.FB = 0.5 * (self.epsB + self.velB / self.c0)
         self.GB = 0.5 * (self.epsB - self.velB / self.c0)
+        self.FBw = np.fft.rfft(self.FB)
+        self.GBw = np.fft.rfft(self.GB)
+
+
 
     def read_specimen(self):
         """
@@ -255,7 +209,7 @@ class solveCFC:
             #print("next power of 2 = %d, %d" %(n, m))
 
             #diff= m - N + 1
-            diff = 1000
+            diff = 100000
 
             
             velA = np.pad(velA, (diff, diff), 'constant', constant_values=velA[0])
@@ -297,6 +251,9 @@ class solveCFC:
         self.specimen_strain = specimen_strain
         self.specimen_stress = specimen_stress
 
+        self.PA = self.epsA * self.E_bar * self.A_bar # store the initial force signal
+        self.PB = self.epsB * self.E_bar * self.A_bar # so we can recover the vertical offset (DC component) after Fourier transforms
+
         self.w = 2*np.pi * np.fft.rfftfreq(len(self.t), d=self.dt)
         self.gamma = self.alpha + 1.0j * self.w / self.c0
 
@@ -316,16 +273,18 @@ class solveCFC:
         plot the strain gauge signals at A and B
         """
 
-        plt.plot(self.t, -self.rho * self.c0**2 * self.epsA * self.A_bar, label="force A")
-        plt.plot(self.t, -self.rho * self.c0**2 * self.epsB * self.A_bar, label="force B")
-        plt.plot(self.t, -self.PA_shifted, "c--", label="force A shifted")
+        #plt.plot(self.t, -self.rho * self.c0**2 * self.epsA * self.A_bar, label="force A")
+        #plt.plot(self.t, -self.rho * self.c0**2 * self.epsB * self.A_bar, label="force B")
+        #plt.plot(self.t, -self.PA_shifted, "c--", label="force A shifted")
         plt.plot(self.t, -self.PB_shifted, "r--", label="force B shifted")
+        #plt.plot(self.t, -self.PA_shifted, "c--", label="force A shifted")
+        plt.plot(self.t, -(self.PA_shifted + self.PB_shifted)/2, "r-", label="force AB shifted sum")
 
         specimen_area = 0.25 * np.pi * self.specimen_diameter**2
         specimen_force = -self.specimen_stress * specimen_area
         plt.plot(self.t, specimen_force, "g--", label="specimen")
-        #plt.xlim(-0.20, 0.25)
-        #plt.ylim(-1, None)
+        plt.xlim(-1.0, 2.0)
+        plt.ylim(0, None)
         plt.legend()
         plt.grid()
         plt.show()
