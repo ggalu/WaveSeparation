@@ -2,7 +2,7 @@
 # @Author: Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
 # @Date:   2024-12-09 08:20:48
 # @Last Modified by:   Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
-# @Last Modified time: 2025-01-25 16:59:26
+# @Last Modified time: 2025-01-25 17:16:06
 
 """
 Apply the wave separation technique of 
@@ -43,8 +43,8 @@ class solveCFC:
             self.resolveAtDistanceTimeDomain(130.0, -130.0)
         
 
-        self.plot_AB()
-        #self.plot_FG()
+        #self.plot_AB()
+        self.plot_FG()
         #self.plot_strain()
         #self.plot_specimen()
         #self.plot()
@@ -209,7 +209,7 @@ class solveCFC:
             #print("next power of 2 = %d, %d" %(n, m))
 
             #diff= m - N + 1
-            diff = 100000
+            diff = 1000
 
             
             velA = np.pad(velA, (diff, diff), 'constant', constant_values=velA[0])
@@ -295,7 +295,7 @@ class solveCFC:
         """
         px = 1/plt.rcParams['figure.dpi']  # pixel in inches
         fig = plt.figure(figsize=(1200*px, 800*px))
-        gs = fig.add_gridspec(4, 2, hspace=0)
+        gs = fig.add_gridspec(3, 2, hspace=0)
         axs = gs.subplots(sharex=True, sharey=False)
         fig.suptitle('Sharing both axes')
         
@@ -307,13 +307,9 @@ class solveCFC:
         axs[1,0].plot(self.t, self.GA, "--", label="G @ A")
         axs[1,0].legend()
 
-        axs[2,0].plot(self.t, self.FA_shifted, "--", label="F shifted")
-        axs[2,0].plot(self.t, self.GA_shifted, "--", label="G_shifted")
+        axs[2,0].plot(self.t, self.PA_shifted, "--", label="force shifted")
+        axs[2,0].plot(self.t, self.vA_shifted, "--", label="velocity shifted")
         axs[2,0].legend()
-
-        axs[3,0].plot(self.t, self.PA_shifted, "--", label="force shifted")
-        axs[3,0].plot(self.t, self.vA_shifted, "--", label="velocity shifted")
-        axs[3,0].legend()
 
         # plot strain gauge B
         axs[0,1].plot(self.t, self.rho * self.c0**2 * self.epsB * self.A_bar, label="force B")
@@ -324,13 +320,9 @@ class solveCFC:
         axs[1,1].plot(self.t, self.GB, "--", label="G @ B")
         axs[1,1].legend()
 
-        axs[2,1].plot(self.t, self.FB_shifted, "--", label="F@B shifted")
-        axs[2,1].plot(self.t, self.GB_shifted, "--", label="G@B_shifted")
+        axs[2,1].plot(self.t, self.PB_shifted, "--", label="force B shifted")
+        axs[2,1].plot(self.t, self.vB_shifted, "--", label="velocity B shifted")
         axs[2,1].legend()
-
-        axs[3,1].plot(self.t, self.PB_shifted, "--", label="force B shifted")
-        axs[3,1].plot(self.t, self.vB_shifted, "--", label="velocity B shifted")
-        axs[3,1].legend()
         plt.show()
 
     

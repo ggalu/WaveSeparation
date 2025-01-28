@@ -2,7 +2,7 @@
 # @Author: Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
 # @Date:   2025-01-24 16:35:10
 # @Last Modified by:   Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
-# @Last Modified time: 2025-01-25 17:07:26
+# @Last Modified time: 2025-01-25 17:17:42
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -149,7 +149,9 @@ class SimulateSymmpact:
 
         # interpolate nodal velocities to strain gauge locations
         # N_i ---- Element_i ----- N_i+1
-        velA = 0.5 * (self.history_nodal_vel[self.idxA,:] + self.history_nodal_vel[self.idxA + 1,:])
+        # let's have and additional errorneous offset between strain and velocity measurment
+        offset = int(0.0 / self.dx0)
+        velA = 0.5 * (self.history_nodal_vel[self.idxA+offset,:] + self.history_nodal_vel[self.idxA+offset + 1,:])
         velB = 0.5 * (self.history_nodal_vel[self.idxB,:] + self.history_nodal_vel[self.idxB + 1,:])
 
         # compute average specimen strain
