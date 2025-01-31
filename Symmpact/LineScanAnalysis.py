@@ -19,7 +19,7 @@ from trackROI_chiSquare import TrackROI
 import skimage
 
 # only edit lines below:
-path = "/home/gcg/Projekte/21_WaveSeparation/2025-01-30_Waveseparation/01_M150"; fac=1
+path = "/home/gcg/Projekte/21_WaveSeparation/2025-01-30_Waveseparation/02_PC"; fac=1
 smooth_sigma = 3.0
 flipX = False # flip horizontal axis
 
@@ -310,7 +310,7 @@ p.sigTreeStateChanged.connect(change)
 t = ParameterTree()
 t.setParameters(p, showTop=False)
 
-## Create some widgets to be placed inside
+## Create some widgets to be placed inside.QHBoxLayout()
 btnROI1 = QtWidgets.QPushButton('track ROI 1')
 btnROI1.clicked.connect(clickedBtnROI1)
 btnROI2 = QtWidgets.QPushButton('track ROI 2')

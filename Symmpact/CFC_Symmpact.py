@@ -2,7 +2,7 @@
 # @Author: Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
 # @Date:   2024-12-09 08:20:48
 # @Last Modified by:   Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
-# @Last Modified time: 2025-01-31 15:04:24
+# @Last Modified time: 2025-01-31 21:27:46
 
 """
 Apply the wave separation technique of 
@@ -26,12 +26,12 @@ from scipy.interpolate import make_smoothing_spline
 #global dt
 
 
-path = "/home/gcg/Projekte/21_WaveSeparation/2025-01-30_Waveseparation/01_M150"
+path = "/home/gcg/Projekte/21_WaveSeparation/2025-01-30_Waveseparation/02_PC"
 
 class solveCFC:
     def __init__(self, path):
 
-
+        self.path = path
         self.rho = 2.7e-6
         self.E_bar = 70.0
         self.A_bar = 0.25 * np.pi * 40**2
@@ -44,6 +44,7 @@ class solveCFC:
         self.shift = 120.0 # shifting distance from strain gauge to specimen
         self.calibration_factor=0.009444415150988306*1.05 # conversion factor between force and velocity
         self.significant_force_level = 1.0
+        self.firstCall = True     
 
         self.LoadDisplacementOverTime(path)
         self.LoadForceOverTime(path)
@@ -53,10 +54,11 @@ class solveCFC:
         #self.resolveAtDistanceFrequencyDomain(-110.0)
         self.resolveAtDistanceTimeDomain()
 
-        self.plotForce()
-
-        self.plotShiftedForce()
-        self.show_SpinBox()
+        #self.plotForce()
+        #self.plotShiftedForce()
+        
+        
+        self.createWidgets()
 
         #self.plot_AB()
         #self.plot_FG()
@@ -65,7 +67,7 @@ class solveCFC:
         #self.plot()
 
 
-    def show_SpinBox(self):
+    def createWidgets(self):
         """
         This routine is called whenever the additional shift value between line scan and strain gauge time axes changes.
         """
@@ -79,7 +81,7 @@ class solveCFC:
             self.resolveAtDistanceTimeDomain() # uses upaded shifting distance
 
             self.shiftedForceLine.setData(self.time, self.PA_shifted)
-            self.forceFromVelocityLine.setData(self.time, self.v * self.rho * self.c0 * self.A_bar)
+            self.lineScanVelocityLine.setData(self.time, self.v)
 
 
         def valueChanged_delay(spinbox):
@@ -95,29 +97,103 @@ class solveCFC:
             print("updateing calib factor", self.calibration_factor)
             updatePlot()
 
-        #app = pg.mkQApp("SpinBox Example")
+        def clickedBtnSave():
+            outData = np.column_stack((self.time, self.PA_shifted))
+            filename = os.path.join(self.path, "CFC_force.txt")
+            np.savetxt(filename, outData, header="time, shifted_force")
+            print("wrote shifted force to file: ", filename)
+
+        #if self.firstCall:
+        #    self.CalibrateVelocity()
+        #    self.Interpolate() # uses updated delay between line scan and strain gauge data
+        #    self.calculate_F_G_unshifted()
+        #    self.resolveAtDistanceTimeDomain()
+        #    self.firstCall = False
+
+
+        app = pg.mkQApp("SpinBox Example")
         win = QtWidgets.QMainWindow()
-        win.setWindowTitle('pyqtgraph example: SpinBox')
-        cw = QtWidgets.QWidget()
-        layout = QtWidgets.QGridLayout()
-        cw.setLayout(layout)
-        win.setCentralWidget(cw)
+        win.setWindowTitle('CFC Analysis')
+        centralWidget = QtWidgets.QWidget()
+        win.setCentralWidget(centralWidget)
+        win.resize(1200,800)
         win.show()
-        spin_delay = pg.SpinBox(value=0.0, bounds=[None, None], finite=True)
+
+        layoutH0 = QtWidgets.QHBoxLayout()
+        
+    
+        layoutVL = QtWidgets.QVBoxLayout()
+        layoutH0.addLayout(layoutVL, 1)
+    
+        layoutVR = QtWidgets.QVBoxLayout()
+        layoutH0.addLayout(layoutVR, 4)
+        centralWidget.setLayout(layoutH0)
+
+        
+
+        
+
+
+        # plotting widgets
+        pg.setConfigOptions(antialias=True)
+        plotWidget = pg.plot(title="Force-Velocity consitency check")
+        plotWidget.addLegend()
+        plotWidget.plot(self.time, self.force / (self.rho * self.c0 * self.A_bar), pen=pg.mkPen(1, width=2,), name="velocity from strain gauges")  ## setting pen=None disables line drawing
+        self.lineScanVelocityLine = plotWidget.plot(self.time, self.v, pen=pg.mkPen("g", width=2,), name="linescan velocity")
+        plotWidget.setLabel('left', 'velocity', units='m/s')
+        plotWidget.setLabel('bottom', 'time', units='ms')
+        plotWidget.showGrid(x=True, y=True)
+        #plotWidget.setXRange(self.rise_time,self.rise_time + self.tau)
+        plotWidget.setAutoVisible(y=1)
+        
+
+        # add second plot 
+        pg.setConfigOptions(antialias=True)
+        plotWidget2 = pg.plot(title="CFC Force shifted to specimen")
+        plotWidget2.addLegend()
+        plotWidget2.plot(self.time, self.force, pen=pg.mkPen("r", width=2,), name="force from strain gauges")  ## setting pen=None disables line drawing
+        self.shiftedForceLine = plotWidget2.plot(self.time, self.PA_shifted, pen=pg.mkPen("g", width=2,), name="CFC shifted force")
+        plotWidget2.setLabel('left', 'force', units='kN')
+        plotWidget2.setLabel('bottom', 'time', units='ms')
+        plotWidget2.showGrid(x=True, y=True)
+        plotWidget2.setAutoVisible(y=1)
+
+        
+        spin_delay = pg.SpinBox(value=0.0, bounds=[None, None], finite=True, suffix="ms")
+        #spin_delay.setAlignment(QtCore.Qt.AlignTop)
         spin_delay.sigValueChanged.connect(valueChanged_delay)
 
-        spin_shift = pg.SpinBox(value=120, int=True, minStep=1, step=1, bounds=[None, None], finite=True)
+        spin_shift = pg.SpinBox(value=120, int=True, minStep=1, step=1, bounds=[None, None], finite=True, suffix='mm')
         spin_shift.sigValueChanged.connect(valueChanged_shift)
 
         spin_calibrationFactor = pg.SpinBox(value=self.calibration_factor, step=0.01 *self.calibration_factor,  bounds=[None, None], finite=True)
         spin_calibrationFactor.sigValueChanged.connect(valueChanged_calibrationFactor)
 
-        layout.addWidget(QtWidgets.QLabel("delay:"))
-        layout.addWidget(spin_delay)
-        layout.addWidget(QtWidgets.QLabel("shifting distance:"))
-        layout.addWidget(spin_shift)
-        layout.addWidget(QtWidgets.QLabel("velocity calibration factor:"))
-        layout.addWidget(spin_calibrationFactor)
+
+        layoutVR.addWidget(plotWidget2, stretch=3, alignment=QtCore.Qt.AlignTop)
+        layoutVR.addWidget(plotWidget, stretch=3)
+
+        layoutVL.addWidget(QtWidgets.QLabel("linescan to strain gauge delay:"))
+        layoutVL.addWidget(spin_delay)
+
+        label = QtWidgets.QLabel()
+        label.setFrameStyle(QtWidgets.QFrame.HLine)
+        label.setLineWidth(1)
+        layoutVL.addWidget(label)
+
+        layoutVL.addWidget(QtWidgets.QLabel("shifting distance:"))
+        layoutVL.addWidget(spin_shift)
+        layoutVL.addWidget(label)
+        layoutVL.addWidget(QtWidgets.QLabel("velocity calibration factor:"))
+        layoutVL.addWidget(spin_calibrationFactor)
+        layoutVL.addWidget(label)
+        
+        btnSave = QtWidgets.QPushButton('save shifted force')
+        btnSave.clicked.connect(clickedBtnSave)
+        layoutVL.addWidget(btnSave)
+
+        layoutVL.addStretch()
+        
         pg.exec()
 
     def CalibrateVelocity(self):
@@ -130,7 +206,7 @@ class solveCFC:
 
         
 
-            # establish first wave transit time
+        # establish first wave transit time
         import tools
         rise_time_index = tools.find_TTL(self.force, direction="positive", level=self.significant_force_level)
         self.rise_time = self.time[rise_time_index]
@@ -270,14 +346,14 @@ class solveCFC:
         self.vB_shifted -= self.vB_shifted[0]
 
 
-    def calculate_F_G_unshifted(self, nsmooth=200):
+    def calculate_F_G_unshifted(self, nsmooth=100):
         """
         Calculate the unshifted time domain signals F(t) and G(t).
         Unshifted means that they are calculated at the locations of the strain gauge.
         Also perform filtering.
         """
 
-        smooth_eps = savgol_filter(self.eps, nsmooth, 3)
+        smooth_eps = savgol_filter(self.eps, nsmooth, 1)
         smooth_v   = savgol_filter(self.v, nsmooth, 1)
 
         self.FA = 0.5 * (smooth_eps + smooth_v / self.c0)
@@ -292,7 +368,7 @@ class solveCFC:
         plotWidget.addLegend()
         
         plotWidget.plot(self.time, self.force, pen=pg.mkPen(1, width=2,), name="force from strain gauges")  ## setting pen=None disables line drawing
-        self.forceFromVelocityLine = plotWidget.plot(self.time, self.v * self.rho * self.c0 * self.A_bar, pen=pg.mkPen("g", width=2,), name="force from velocity")
+        self.lineScanVelocityLine = plotWidget.plot(self.time, self.v * self.rho * self.c0 * self.A_bar, pen=pg.mkPen("g", width=2,), name="force from velocity")
 
         plotWidget.setLabel('left', 'force', units='kN')
         plotWidget.setLabel('bottom', 'force', units='kN')
