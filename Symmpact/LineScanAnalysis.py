@@ -15,13 +15,12 @@ from pyqtgraph.Qt import QtGui, QtCore
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.parametertree import Parameter, ParameterTree
-from trackROI_SciKit_v2 import TrackROI # this is with subpixel refinement
-
-
-
+from trackROI_chiSquare import TrackROI
+import skimage
 
 # only edit lines below:
-path = "/home/gcg/Projekte/21_WaveSeparation/2024-01-27_Waveseparation/03"; fac=1
+path = "/home/gcg/Projekte/21_WaveSeparation/2025-01-30_Waveseparation/01_M150"; fac=1
+smooth_sigma = 3.0
 flipX = False # flip horizontal axis
 
 
@@ -39,7 +38,7 @@ params = [{'name': 'px2mm', 'type': 'float', 'value':  fac, 'step': 1.0e-3, 'siP
           {'name': "ROI1 stop", 'type': 'int', 'value': 1740, 'suffix': ' px'},
           {'name': "ROI2 start", 'type': 'int', 'value': 3170, 'suffix': ' px'},
           {'name': "ROI2 stop", 'type': 'int', 'value': 3240, 'suffix': ' px'},
-          {'name': "subpixel refinement", 'type': 'int', 'value': 10, 'suffix': ' px'},
+          {'name': "smoothing sigma", 'type': 'float', 'value': smooth_sigma, 'suffix': ' px'},
           ]
 
 
@@ -60,6 +59,8 @@ def read_linescan_data(path):
     #import imageio
     from matplotlib.pyplot import imread
     image_data = imread(os.path.join(path,files[0]))
+    image_data = skimage.filters.gaussian(image_data, sigma=(0, smooth_sigma))
+
     if flipX:
         image_data = np.flip(image_data, axis=1)
     #, flatten=1
@@ -145,7 +146,7 @@ def clickedBtnROI1(btnROI1):
     print("button clicked!", ROI1.getRegion())
     with pg.BusyCursor():
         global t1
-        t1 = TrackROI(data, int(ROI1.getRegion()[0]), int(ROI1.getRegion()[1]), p["subpixel refinement"])
+        t1 = TrackROI(data, int(ROI1.getRegion()[0]), int(ROI1.getRegion()[1]))
         global curve1
         curve1.setData(x, t1.displacements * p["px2mm"])
         
@@ -177,7 +178,7 @@ def clickedBtnROI2(btnROI2):
     print("button 2 clicked!", ROI2.getRegion())
     #from trackROI import TrackROI
     with pg.BusyCursor():
-        t2 = TrackROI(data, int(ROI2.getRegion()[0]), int(ROI2.getRegion()[1]), p["subpixel refinement"])
+        t2 = TrackROI(data, int(ROI2.getRegion()[0]), int(ROI2.getRegion()[1]))
         global curve2
         curve2.setData(x, t2.displacements * p["px2mm"])
 
@@ -213,8 +214,7 @@ def saveToFile(btn):
     strain = (y2 - y1) / L0  
     
     header = "linescan frequency = %f kHz\npixel length = %f mm\ngauge length = %f\ntime [msec], ROI1 displacement [mm], ROI2 displacement [mm], relative displacement [mm],  strain [-]" % (p["scan rate"], p["px2mm"], L0*p["px2mm"])
-    np.savetxt(os.path.join(path, "linescan_analysis.dat"), np.column_stack((x, t1.displacements, t1.subPixelShifts, y3, strain)),
-                header=header)
+    np.savetxt(os.path.join(path, "linescan_analysis.dat"), np.column_stack((x, t1.displacements)), header=header)
     print("wrote output file linescan_analysis.dat to directory [%s]" % (path))
     
 def saveState():
@@ -368,8 +368,6 @@ plotTrack2 = pg.PlotWidget(title="relative displacement")
 curve3 = plotTrack2.plot(x, y, pen=(255,0,255), name="Red curve")
 plotTrack2.setLabel('left', "displacement", units='mm')
 plotTrack2.setLabel('bottom', "time", units='ms')
-
-
 
 
 makeLayout()

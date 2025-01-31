@@ -2,7 +2,7 @@
 # @Author: Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
 # @Date:   2025-01-27 17:50:34
 # @Last Modified by:   Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
-# @Last Modified time: 2025-01-28 10:49:00
+# @Last Modified time: 2025-01-28 15:18:03
 import numpy as np
 import copy
 from skimage.feature import match_template
@@ -49,7 +49,7 @@ class TrackROI():
             currentFrame = self.yield_frame(i)
             #subPixelShift, error, diffphase = skimage.registration.phase_cross_correlation(template, currentFrame, upsample_factor=self.subpixel_refinement)
             pixelShift_float, error, diffphase = skimage.registration.phase_cross_correlation(
-                self.refFrame, currentFrame, reference_mask=self.ROI, upsample_factor=100, disambiguate=True)
+                self.refFrame, currentFrame, reference_mask=self.ROI, disambiguate=False)
             pixelShift = int(pixelShift_float[0])
             #print( "pixel shift:", pixelShift_float[0], pixelShift)
 
@@ -59,15 +59,28 @@ class TrackROI():
             refFrame_windowed = self.refFrame[self.ROI_start:self.ROI_stop,:]
             curFrame_windowed =  currentFrame[self.ROI_start-pixelShift:self.ROI_stop-pixelShift,:]
             assert len(refFrame_windowed) == len(curFrame_windowed)
-            subPixelShift_float, error, diffphase = skimage.registration.phase_cross_correlation(
+            result, error, diffphase = skimage.registration.phase_cross_correlation(
                 refFrame_windowed, curFrame_windowed, upsample_factor=100)
             #print("subpixel shift is", subPixelShift_float)
 
-            print( "pixel shift:", pixelShift_float[0], pixelShift, subPixelShift_float[0])
-            self.subPixelShifts[i] = subPixelShift_float[0]
+            subshift = result[0]
+            if abs(subshift) > abs(pixelShift):
+                print(f"ERROR: subshift is {subshift} which is larger than integer pixel shift {pixelShift}")
+                subshift += pixelShift
+
+            print( "pixel shift:", pixelShift_float[0], pixelShift, subshift, diffphase)
+
+
+
+            self.subPixelShifts[i] = subshift
 
             #plt.plot(subPixelShift_float[0])
             #plt.show()
+
+        plt.plot(self.displacements)
+        plt.plot(self.displacements + self.subPixelShifts, label="with subpix")
+        plt.show()
+
             
         
        
@@ -77,10 +90,28 @@ class TrackROI():
         image = self.allFrames[i,:]
         
         # duplicate row to have a 2d image as required for SciKit-Image
-        shape = np.shape(image)
-        image2d = np.zeros((shape[0], 2))
-        image2d[:,0] = image
-        image2d[:,1] = image
-        
+        nTile = 2
+        image2d = np.tile(image, (nTile, 1)).transpose()
+
+        #plt.imshow(image2d)
+        #plt.show()
+
+        #print("shape of tiled image:", image2d.shape)
+
         return image2d
         #return signal.detrend(image)
+
+
+if __name__ == "__main__":
+    filename = "/home/gcg/Projekte/21_WaveSeparation/2024-01-27_Waveseparation/01/01.bmp"
+    from matplotlib.pyplot import imread
+    image_data = imread(filename)
+
+    #plt.imshow(image_data)
+    #plt.show()
+
+
+    image_data = image_data[2300:2400,:].astype(np.float32)
+
+    nrefine = 10
+    tracker = TrackROI(image_data, 485, 1740, nrefine)

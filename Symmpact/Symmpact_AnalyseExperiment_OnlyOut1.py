@@ -2,7 +2,7 @@
 # @Author: Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
 # @Date:   2024-05-01 17:17:57
 # @Last Modified by:   Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
-# @Last Modified time: 2025-01-27 22:04:43
+# @Last Modified time: 2025-01-31 11:25:25
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -25,7 +25,7 @@ import glob
 sys.path.append("../") 
 
 
-path = "/home/gcg/Coding/WaveSeparation/Symmpact/2024-01-27_Waveseparation/01"
+path = "/home/gcg/Projekte/21_WaveSeparation/2025-01-30_Waveseparation/02_PC"
 
 #filename_in = sys.argv[1]
 #print("input filename:", filename_in)
@@ -51,6 +51,9 @@ class AnalyzeSHTBExperiment():
         flashIndex = tools.find_TTL(self.marker, 0.5)
         flashTime = self.time[flashIndex]
         print("flash time:", flashTime)
+
+        self.time -= flashTime
+        print("offsetting time axis to flash time")
 
         self.convertVoltsToForceAndStrain()
         #self.cutData()
