@@ -2,7 +2,7 @@
 # @Author: Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
 # @Date:   2024-12-09 08:20:48
 # @Last Modified by:   Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
-# @Last Modified time: 2025-01-31 14:49:22
+# @Last Modified time: 2025-01-31 15:04:24
 
 """
 Apply the wave separation technique of 
@@ -69,31 +69,33 @@ class solveCFC:
         """
         This routine is called whenever the additional shift value between line scan and strain gauge time axes changes.
         """
+        def updatePlot():
+            """
+            Run through all rreqquired steps to produce the shifted CFC anaylsis force.
+            """
+            self.Interpolate() # uses updated delay between line scan and strain gauge data
+            self.calculate_F_G_unshifted()
+            ##self.resolveAtDistanceFrequencyDomain(-110.0)
+            self.resolveAtDistanceTimeDomain() # uses upaded shifting distance
+
+            self.shiftedForceLine.setData(self.time, self.PA_shifted)
+            self.forceFromVelocityLine.setData(self.time, self.v * self.rho * self.c0 * self.A_bar)
+
 
         def valueChanged_delay(spinbox):
-
             self.delay = spinbox.value()
-            print(self.delay)
-
-            self.Interpolate()
-            #self.CalibrateVelocity(calibration_factor=0.009444415150988306)
-            self.calculate_F_G_unshifted()
-            ##self.resolveAtDistanceFrequencyDomain(-110.0)
-            self.resolveAtDistanceTimeDomain()
-            self.shiftedForceLine.setData(self.time, self.PA_shifted)
+            updatePlot()
 
         def valueChanged_shift(spinbox):
-
             self.shift = spinbox.value()
-            print(self.shift)
-            self.Interpolate()
-            #self.CalibrateVelocity(calibration_factor=0.009444415150988306)
-            self.calculate_F_G_unshifted()
-            ##self.resolveAtDistanceFrequencyDomain(-110.0)
-            self.resolveAtDistanceTimeDomain()
-            self.shiftedForceLine.setData(self.time, self.PA_shifted)
+            updatePlot()
 
-        app = pg.mkQApp("SpinBox Example")
+        def valueChanged_calibrationFactor(spinbox):
+            self.calibration_factor = spinbox.value()
+            print("updateing calib factor", self.calibration_factor)
+            updatePlot()
+
+        #app = pg.mkQApp("SpinBox Example")
         win = QtWidgets.QMainWindow()
         win.setWindowTitle('pyqtgraph example: SpinBox')
         cw = QtWidgets.QWidget()
@@ -107,10 +109,15 @@ class solveCFC:
         spin_shift = pg.SpinBox(value=120, int=True, minStep=1, step=1, bounds=[None, None], finite=True)
         spin_shift.sigValueChanged.connect(valueChanged_shift)
 
+        spin_calibrationFactor = pg.SpinBox(value=self.calibration_factor, step=0.01 *self.calibration_factor,  bounds=[None, None], finite=True)
+        spin_calibrationFactor.sigValueChanged.connect(valueChanged_calibrationFactor)
+
         layout.addWidget(QtWidgets.QLabel("delay:"))
         layout.addWidget(spin_delay)
         layout.addWidget(QtWidgets.QLabel("shifting distance:"))
         layout.addWidget(spin_shift)
+        layout.addWidget(QtWidgets.QLabel("velocity calibration factor:"))
+        layout.addWidget(spin_calibrationFactor)
         pg.exec()
 
     def CalibrateVelocity(self):
@@ -178,6 +185,7 @@ class solveCFC:
 
         # interpolate velocity data to new time axis
         self.v_px = -spl_linescan(self.time, nu=1)
+        print("calibration factor:", self.calibration_factor)
         self.v = self.v_px * self.calibration_factor
 
         # compute strain from force data and interpolate to new time axis
@@ -283,9 +291,9 @@ class solveCFC:
         plotWidget = pg.plot(title="Force-Velocity consitency check")
         plotWidget.addLegend()
         
-        self.shiftedForceLine = plotWidget.plot(self.time, self.force, pen=pg.mkPen(1, width=2,), name="force from strain gauges")  ## setting pen=None disables line drawing
-        
-        plotWidget.plot(self.time, self.v * self.rho * self.c0 * self.A_bar, pen=pg.mkPen("g", width=2,), name="force from velocity")
+        plotWidget.plot(self.time, self.force, pen=pg.mkPen(1, width=2,), name="force from strain gauges")  ## setting pen=None disables line drawing
+        self.forceFromVelocityLine = plotWidget.plot(self.time, self.v * self.rho * self.c0 * self.A_bar, pen=pg.mkPen("g", width=2,), name="force from velocity")
+
         plotWidget.setLabel('left', 'force', units='kN')
         plotWidget.setLabel('bottom', 'force', units='kN')
         plotWidget.showGrid(x=True, y=True)
