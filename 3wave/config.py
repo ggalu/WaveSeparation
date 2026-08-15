@@ -22,7 +22,12 @@ import tomllib
 
 __all__ = ['load', 'CASES', 'DEFAULT_PATH']
 
-CASES = ('compression', 'tension')
+CASES = ('compression', 'tension', 'calibration_tension')
+
+# Cases that run through simulate_tension.py and therefore need a striker and
+# an anvil table as well as a bar and a specimen.
+_SHTB_CASES = ('tension', 'calibration_tension')
+
 DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             'config.toml')
 
@@ -33,8 +38,9 @@ def load(case, path=DEFAULT_PATH):
 
     Parameters
     ----------
-    case : 'compression' | 'tension'
-        Which of the two setups to read.
+    case : one of CASES
+        Which setup to read: 'compression', 'tension' or
+        'calibration_tension'.
     path : str
         Location of the TOML file. Defaults to config.toml beside this module,
         so the scripts work regardless of the current working directory.
@@ -77,7 +83,7 @@ def _validate(cfg, case, path):
     for key in ('bar', 'specimen'):
         if key not in cfg:
             raise KeyError(f'{where}: missing [{case}.{key}] table')
-    if case == 'tension':
+    if case in _SHTB_CASES:
         for key in ('striker', 'anvil'):
             if key not in cfg:
                 raise KeyError(f'{where}: missing [{case}.{key}] table')

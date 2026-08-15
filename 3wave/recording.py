@@ -50,7 +50,7 @@ class GaugeRecorder:
         spec = np.asarray(specimen_indices)
 
         # Interface elements and the planes they bound. Derived from the
-        # specimen indices rather than assumed, because simulate.py's regions
+        # specimen indices rather than assumed, because simulate_compression.py's regions
         # are built as node indices and used on element arrays.
         self.iface_in = int(spec.min()) - 1      # last input-bar element
         self.iface_out = int(spec.max()) + 1     # first output-bar element

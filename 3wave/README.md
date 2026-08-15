@@ -7,13 +7,13 @@ specimen stress/strain, and a validation against a 1D Hopkinson bar simulation.
 ## Quick start
 
 ```bash
-python3 drive.py             # ~1 s  -> dump.npz
+python3 drive_compression.py             # ~1 s  -> dump.npz
 python3 reduce_specimen.py   # ~2 s  -> specimen_reconstruction.png
 ```
 
-`drive.py` runs the simulation and records the gauge signals;
+`drive_compression.py` runs the simulation and records the gauge signals;
 `reduce_specimen.py` does the actual wave reconstruction. You only re-run
-`drive.py` when you change a simulation parameter — the reconstruction reads
+`drive_compression.py` when you change a simulation parameter — the reconstruction reads
 `dump.npz`, so iterating on the analysis is a 2-second loop.
 
 There is a second simulator, a Split Hopkinson **tension** bar driven by a
@@ -28,14 +28,49 @@ the sign convention rather than being told. Unlike the compression model it
 produces genuine incident/reflected **overlap** at the input-bar gauge, which is
 the case multi-gauge separation exists for.
 
+### Always run a driver, never a simulator
+
+`simulate_compression.py` and `simulate_tension.py` are modules, not scripts. **Do not run
+them directly.** Both have a `__main__` block, so doing it looks like it works —
+the full simulation runs and `specimen.dat` gets written — but **no `dump.npz` is
+produced**, and every analysis script afterwards then either fails outright or
+silently reads the dump left over from some earlier run. That is a bug you can
+stare at for a while.
+
+A simulator also always falls back to its own default case, so
+`python3 simulate_tension.py` can only ever give you `[tension]` — there is no
+way to reach `[calibration_tension]` through it.
+
+| to get | run | never run |
+|---|---|---|
+| direct-impact compression bar | `python3 drive_compression.py` | `simulate_compression.py` |
+| SHTB with a specimen | `python3 drive_tension.py` | `simulate_tension.py` |
+| connected-bar calibration shot | `python3 drive_calibration_tension.py` | `simulate_tension.py` |
+
+The drivers are three lines each and set nothing themselves; they pick a case out
+of `config.toml`, run the model and write the dump. The simulators are kept
+importable so that a parameter sweep can override the config and run the model in
+memory without touching `dump.npz` — that is what the 59-gauge comb in
+[Where to put the gauges](#where-to-put-the-gauges) was done with, and it is the
+only reason to import one.
+
 ## Everything is configured in one file
 
-`config.toml` holds both cases — materials, geometry, gauge locations, numerics
-and the analysis `eta`. The drivers and the analysis scripts read it; nothing is
-hardcoded in the Python any more. To move a gauge or change the striker, edit
-`config.toml` and re-run the driver.
+`config.toml` holds all three cases — materials, geometry, gauge locations,
+numerics and the analysis `eta`. The drivers and the analysis scripts read it;
+nothing is hardcoded in the Python any more. To move a gauge or change the
+striker, edit `config.toml` and re-run the driver.
 
-The two cases are independent and have their own gauge lists:
+There is a third case besides the two above, `[calibration_tension]`: the same bars
+bolted together with no specimen, used to measure the gauge positions and `c0`
+from the record itself. See
+[Calibrating the bar](#calibrating-the-bar-from-a-connected-bar-shot).
+
+```bash
+python3 drive_calibration_tension.py && python3 identify_bar_tension.py
+```
+
+The cases are independent and have their own gauge lists:
 
 ```toml
 [tension.striker]        # POM tube
@@ -383,7 +418,8 @@ Both failure modes are visible in it:
 
 That is why `eta` is mandatory, and why `conditioning()` exists — use it to audit
 a layout before committing to it. See [Choosing eta](#choosing-eta) for how to
-pick the value.
+pick the value, and [Where to put the gauges](#where-to-put-the-gauges) for what
+the layout is and is not worth optimising for.
 
 ### From the separated waves to the force at the specimen
 
@@ -535,6 +571,276 @@ you are above the floor, eta is not a tuning knob at all, and nothing is gained
 by hunting for an optimum. Re-measure it for your own record rather than
 assuming either table applies.
 
+## Where to put the gauges
+
+Short answer: **only the spacing enters the method, and once the signals are
+low-pass filtered even that stops mattering.** Placement is not a lever worth
+optimising on this rig. Three things next to it are, and they close this section.
+
+### Only the spacing enters the algebra
+
+[Two gauges: an exact solve](#two-gauges-an-exact-solve) already collapses the
+determinant to $2i\sin(\xi D)$. Normalising it,
+
+```math
+C(f) \;=\; \frac{\cosh\!\left(2\eta D/c\right) - \cos\!\left(2\omega D/c\right)}
+                {1 + \cosh\!\left(2\eta D/c\right)}
+```
+
+which contains the spacing $D = x_2 - x_1$ and nothing else — **not** where the
+pair sits on the bar. `conditioning()` reproduces this closed form to 1.2e-14.
+Absolute position reaches the answer only through the back-propagation factor
+$e^{\eta x/c_0}$: 1.11 at $x = 530$ mm, 1.79 at $x = 2900$ mm.
+
+So the theory says spacing is the whole story, and predicts the notch comb at
+$f_n = n\,c/2D$ with floor $(\eta D/c)^2$.
+
+### What the sweep says
+
+The SHTB was run once with a 59-gauge comb (50 to 2950 mm in 50 mm steps) and all
+1711 two-gauge layouts reduced end to end. This needs no new code — `gauges`
+takes any number of entries, so a denser list in `config.toml` plus index
+subsetting as in `gauge_count_study.py` is the whole experiment. Noise is 2
+ustrain RMS on a 1110 ustrain peak, low-pass filtered at 20 kHz (99.9 % of the
+gauge energy is below 14 kHz).
+
+Varying the spacing, near gauge fixed at 150 mm:
+
+| D [mm] | 1st notch [kHz] | stress err | strain err |
+|---|---|---|---|
+| 100 | 25.3 | 1.4e-03 | 2.9e-03 |
+| 400 | 6.31 | 3.3e-03 | 2.4e-03 |
+| 800 | 3.16 | 2.0e-03 | 2.4e-03 |
+| 1600 | 1.58 | 2.0e-03 | 2.5e-03 |
+| 2400 | 1.05 | 1.5e-03 | 2.5e-03 |
+
+Sliding a fixed D = 400 mm pair along the bar:
+
+| x_1 [mm] | stress err | strain err |
+|---|---|---|
+| 50 | 2.6e-03 | 2.4e-03 |
+| 500 | 3.5e-03 | 2.8e-03 |
+| 1000 | 2.9e-03 | 2.5e-03 |
+| 1500 | 3.2e-03 | 2.7e-03 |
+| 2500 | **9.0e-03** | 3.4e-03 |
+
+Both are flat, and flat **at the floor** — the ceiling test in
+[Where the error actually is](#where-the-error-actually-is) puts the specimen
+estimator at 1.8e-03 stress even when handed exact interface forces. Any layout
+with D above ~300 mm, anywhere in the first two thirds of the bar, is already
+reduction-limited. The one row that breaks the pattern is the last: past
+x ~ 2000 mm the pair sits in the anvil and contact region, where the clean
+two-wave field the model assumes does not hold.
+
+Without the low-pass the picture looks quite different — stress error runs from
+1.2e-01 at D = 50 mm down to 1.8e-02 at D = 2450 mm, because the broadband noise
+gain falls as $c/\eta D$. That is a real effect, but it is one a filter removes
+anyway (3.9e-02 -> 3.3e-03 at D = 400 mm), so it should not drive the layout.
+
+### Know the spacing, rather than choose it
+
+Measured on the shipped layout, perturbing the positions handed to `separate`
+while leaving the signals alone:
+
+| perturbation | stress err | vs exact |
+|---|---|---|
+| none | 1.87e-03 | 1.0x |
+| D wrong by 1 mm | 6.30e-03 | **3.4x** |
+| D wrong by 4 mm | 2.28e-02 | 12x |
+| both gauges shifted 1 mm, D exact | 2.90e-03 | 1.6x |
+
+A 0.25 % error in D costs more than any placement choice in the tables above,
+while moving the pair bodily costs little. **D is the physical parameter; the
+individual x is not.** This is why `recording.py` resolves each gauge to the
+element centre actually used and stores that exact distance rather than the
+nominal request — rounding it back to the requested figure would inject exactly
+this error.
+
+### Filter, but not circularly
+
+Low-pass filtering is worth 12x on stress at this noise level, and it is what
+makes the layout irrelevant. It is also easy to get wrong: filtering by
+`rfft -> multiply -> irfft` over the raw record is a CIRCULAR convolution, and
+these records do not end where they start, so the discontinuity smears the end of
+the record into its beginning. That measured **1.1e-01 on noise-free data**,
+against 9.9e-04 unfiltered — a filter that destroys two decades of accuracy
+before any noise is present. Edge-pad the record before transforming and crop
+afterwards.
+
+### Recommendation, and the one thing this model cannot test
+
+Near gauge 50–150 mm, far gauge 800–1500 mm. That keeps the notch comb clear,
+holds $e^{\eta x/c_0}$ below 1.35, and stays well away from the anvil. The
+shipped `gauges = [130.0, 530.0]` is already on the floor and does not need
+changing; the wider pair only buys margin.
+
+Real bars have Pochhammer–Chree dispersion, whose model error accumulates with
+propagation distance — an argument for the near end of both ranges that a
+non-dispersive 1D chain cannot show. Pass `dispersion=(f, cp_over_c0)` to
+`separate` for real records, and re-measure the sweep on your own rig rather than
+assuming this table transfers.
+
+## Calibrating the bar from a connected-bar shot
+
+The section above ends with an awkward demand: know `D` to half a millimetre,
+and `c0` to a tenth of a percent. On a real rig you measure neither well — the
+gauge is a grid under a blob of adhesive somewhere along a 3 m bar, and the
+handbook modulus and density of 7075-T6 are good to a percent at best.
+
+You do not have to. **Bolt the two bars together with no specimen, fire one shot
+with the striker you already have, and read all of it off the record.**
+
+```bash
+python3 drive_calibration_tension.py    # ~5 s  -> dump.npz
+python3 identify_bar_tension.py         # the identification
+```
+
+`[calibration_tension]` in `config.toml` is the SHTB with the specimen replaced by one
+element of bar material, so the joint reflects nothing and the assembly is a
+single uniform bar. It keeps the **same 800 mm striker** as `[tension]`: a
+calibration you can only run with a striker bought for the purpose is not a
+calibration you will run. `identify_bar_tension.py` is **never told the gauge positions**
+— it recovers them.
+
+### What is identifiable, and what is not
+
+A strain record is a function of time, and every arrival in it is some path
+length divided by `c0`. The whole data set is therefore invariant under
+
+```math
+(\text{all lengths},\; c_0) \;\longrightarrow\; (\lambda \cdot \text{all lengths},\; \lambda c_0)
+```
+
+No amount of timing breaks that. **The experiment fixes every length only up to
+one overall scale**, so exactly one measured length has to be supplied. There is
+no way around this and no cleverness that avoids it.
+
+The script asks for the least painful one: the distance from a single gauge — the
+one the wave reaches first, hence the one furthest from the free end — to the far
+free end. Call it `xi_ref`. Everything else is leverage:
+
+```math
+\frac{\delta c_0}{c_0} \;=\; \frac{\delta D}{D} \;=\; \frac{\delta \xi_\text{ref}}{\xi_\text{ref}}
+```
+
+**The point is the ratio `xi_ref/D`**, which is 8.8 here. A tape measurement good
+to ±2 mm over the 3530 mm reference baseline lands `D` to ±0.23 mm on a 400 mm
+spacing. A sloppy measurement on a long baseline buys a sharp one on a short
+baseline — and the short baseline is precisely the one you cannot measure.
+
+Nothing assumes the two bars are instrumented symmetrically. The script
+**measures** the asymmetry of each nominal pair instead and reports it; on the
+shipped layout it recovers the true 0.000 mm to within 0.23 mm, so it would
+catch a real mismatch.
+
+The trade is better still because of what the reduction consumes. In `separate`
+the positions enter only as $\xi x_k = (\omega - i\eta)x_k/c_0$, so the result
+depends on the **transit times** $x_k/c_0$ and nothing else — scaling positions
+and `c0` together by any factor moves the separated waves by 4e-14 relative. `c0`
+alone is still needed, but only in `bar_interface`, where it converts strain to
+velocity **linearly**.
+
+**Density is not identifiable at all.** Strain is dimensionless and time is all
+the record carries, so the shot fixes $c_0 = \sqrt{E/\rho}$ and never `E` and
+`rho` separately. Breaking that needs one absolute force or mass measurement;
+weighing the bar is the easy one. The reduction never asks for `rho` — it asks
+for `E*A`, a force scale — so calibrate `E*A` directly from a static load or from
+striker momentum, and treat `rho` as a by-product.
+
+### Why edges, not pulses
+
+The 800 mm striker gives a 1097 us pulse against a 2376 us assembly round trip,
+so **the free-end echo arrives while the direct pulse is still passing** — at the
+gauge nearest the free end it arrives 118 us before the direct pulse has even
+ended. Matched-filtering whole pulses, which is the obvious approach and works
+perfectly with a short striker, **fails outright here**: measured errors of 10 to
+50 % on `2 xi/c0`, with one estimate off by a factor of 4, because the correlation
+peak it locks onto is the direct pulse's own trailing edge rather than the echo.
+
+Differentiating first fixes it. In the derivative a gauge `xi` from the free end
+sees four sharp features:
+
+| delay | sign | what |
+|---|---|---|
+| 0 | + | the pulse arriving |
+| `P` | − | its own trailing edge (`P` = striker pulse length) |
+| `2 xi / c0` | − | the free-end echo arriving, inverted |
+| `2 xi/c0 + P` | + | that echo's trailing edge |
+
+The flat top of a long pulse differentiates to nothing, so pulse length stops
+mattering — only edge sharpness does (59 us, 10–90 %, here).
+
+The two negative edges are told apart with **nothing assumed about the striker**:
+`P` is identical at every gauge and `2 xi/c0` is not, so `P` is whichever delay a
+majority of gauges share. Where the two happen to land within an edge width of
+each other the gauge shows one merged peak instead of two — `out-0` does, at 40 us
+separation — and it is simply dropped from the `c0` average. Its position still
+comes through, because that is derived from the gauge-to-gauge lag, which is
+always clean. The consistency check makes the rejection automatic: `Q = 2 xi/c0 +
+2·lag` must be identical at every gauge, and the three good ones agree to **0.1 us**
+while the merged one is out by a factor of three.
+
+### Only the free end is used
+
+The anvil end is not a clean reflector. The anvil is a lumped mass rather than a
+termination, so it reflects like a free end **displaced outward** — the echo signs
+alternate `+,−,+,−`, which a rigid end would not do. Measured, it sits 257 mm
+beyond the bar, against the 349 mm its added mass `m/(rho A)` would predict, so it
+cannot be modelled away either; `c0` from an assembly round trip comes out 4.1 %
+low. Everything above therefore uses only the far free end.
+
+**On a compression SHPB struck directly on a genuinely free end this restriction
+lifts**, the round trip `2 L/c0` becomes available, and no reference length is
+needed at all — the bar's own length does the job.
+
+### What comes out
+
+| quantity | identified | true | error |
+|---|---|---|---|
+| striker pulse `P` | 1095.2 us | 1096.9 | −1.6e-03 |
+| `c0` | 5049.295 mm/ms | 5051.338 | **−4.0e-04** |
+| gauge in-0 | 129.40 mm | 129.50 | −0.097 mm |
+| gauge in-1 | *reference* | 529.50 | — |
+| gauge out-0 | 129.64 mm | 129.50 | +0.137 mm |
+| gauge out-1 | 529.68 mm | 529.50 | +0.178 mm |
+| `D`, input / output | 400.097 / 400.042 mm | 400.00 | **+0.10 / +0.04 mm** |
+| transit times `x/c0` | — | — | −3.5e-04 to +1.5e-03 |
+| `E` from `rho c0^2` | 71.642 GPa | 71.700 | −8.1e-04 |
+
+Those are the errors the **timing** costs, with `xi_ref` exact. On a rig the tape
+error multiplies through on top: ±2 mm on the reference baseline adds ±5.7e-04
+relative, i.e. ±2.9 mm/ms on `c0` and ±0.23 mm on `D`.
+
+### It is good enough, end to end
+
+Reducing the SHTB shot with the calibrated numbers, against the same reduction
+with the simulator's own exact values:
+
+| bar parameters from | stress err | strain err |
+|---|---|---|
+| simulator truth (the ceiling) | 1.87e-03 | 2.27e-03 |
+| **`identify_bar_tension.py`, 800 mm striker** | **2.18e-03** | **3.70e-03** |
+| … with a −2 mm tape error on `xi_ref` | 2.89e-03 | 4.24e-03 |
+| … with a +2 mm tape error on `xi_ref` | 1.94e-03 | 3.16e-03 |
+| nominal positions (130/530), exact `c0` | 2.01e-03 | 4.01e-03 |
+| exact positions, `c0` off by 1 % | 2.62e-02 | 1.86e-02 |
+| uncalibrated: 2 mm out, 1 % on `c0` | 5.45e-02 | 3.50e-02 |
+
+The calibrated reduction lands within 17 % of the ceiling on stress, and beats
+using nominal gauge positions even when `c0` is handed over exactly — which on a
+real rig it never is. The last two rows are what you get without the shot: an
+order of magnitude worse.
+
+A short striker does better — 100 mm of POM gives a 137 us pulse, every echo
+isolated, `c0` to 1.8e-04 and `D` to 0.17 mm without any of the edge machinery —
+so use one if you have one. The point of the numbers above is that **you do not
+need one.**
+
+The residual is numerical dispersion in the lumped chain, which slightly reshapes
+an edge between its first and second passage. On a real bar the analogous term is
+Pochhammer–Chree dispersion, which is larger, so treat these figures as a floor
+rather than an expectation.
+
 ## Accuracy and time integration
 
 Both simulators use explicit leapfrog on a lumped mass-spring chain. That is a
@@ -652,10 +958,12 @@ specimen reduction, which is what the floor is actually made of.
 | `config.py` | Reads and validates `config.toml`. stdlib `tomllib`, no dependency. |
 | `recording.py` | Records only the gauge / interface / specimen rows. Resolves gauge distance → element, once, for both simulators. |
 | `dump.py` | Writes and reads `dump.npz`. Its docstring lists every field. |
-| `simulate.py` | 1D direct-impact COMPRESSION bar. Parameters from `[compression]`. |
-| `simulate_tension.py` | 1D Split Hopkinson TENSION bar, POM striker tube and steel anvil. Parameters from `[tension]`. |
-| `drive.py` | Runs `simulate.py`, writes `dump.npz`. Three lines — it sets nothing. |
-| `drive_tension.py` | Same for `simulate_tension.py`. Writes the same filename — the two dumps overwrite each other. |
+| `simulate_compression.py` | 1D direct-impact COMPRESSION bar. Parameters from `[compression]`. A module — **never run directly**, use `drive_compression.py`. |
+| `simulate_tension.py` | 1D Split Hopkinson TENSION bar, POM striker tube and steel anvil. Parameters from `[tension]` or `[calibration_tension]`. A module — **never run directly**, use `drive_tension.py` or `drive_calibration_tension.py`. |
+| `drive_compression.py` | Runs `simulate_compression.py`, writes `dump.npz`. Three lines — it sets nothing. |
+| `drive_tension.py` | Same for `simulate_tension.py`. Writes the same filename — the dumps overwrite each other. |
+| `drive_calibration_tension.py` | Runs the connected-bar calibration shot (`[calibration_tension]`, no specimen) through `simulate_tension.py`. |
+| `identify_bar_tension.py` | Recovers gauge positions, spacing `D` and `c0` from that shot's echo train. Never reads the configured gauge list. |
 | `reduce_specimen.py` | Full chain: gauges → specimen stress/strain, validated against the simulator's own measurement. `--headless` to skip the window. |
 | `plot_forces.py` | Raw gauge forces vs average specimen force. Shows when wave overlap begins. |
 | `gauge_count_study.py` | How many gauges per bar are needed; compares 3+3, 2+3, 1+2, 1+1. |
@@ -665,7 +973,7 @@ specimen reduction, which is what the floor is actually made of.
 
 Generated at run time and safe to delete (`./clean.sh`): `dump.npz`,
 `specimen.dat`, `specimen_reconstructed.dat`, `gauge_forces.png`,
-`specimen_reconstruction.png`. `clean.sh` also removes the superseded
+`specimen_reconstruction.png`, `bar_identification_tension.png`. `clean.sh` also removes the superseded
 `eps.npy` / `force.npy` / `meta.npz` / `meta.npy` if an older run left them.
 
 ## Dependencies

@@ -2,7 +2,7 @@
 Full reduction: three strain gauges per bar -> specimen stress/strain response,
 validated against the simulator's own specimen measurement.
 
-Run drive.py (compression) or drive_tension.py (SHTB) first to produce
+Run drive_compression.py (compression) or drive_tension.py (SHTB) first to produce
 dump.npz. Gauge locations and eta come from config.toml. Then:
 
     python3 reduce_specimen.py              # shows the figure in a window

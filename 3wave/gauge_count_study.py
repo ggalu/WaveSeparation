@@ -5,7 +5,7 @@ Compares gauge layouts against the simulator's own specimen measurement. The
 layouts are given as INDEX subsets into the gauge list configured in
 config.toml, so this adapts to whatever gauges the dump happens to carry.
 
-    python3 drive.py
+    python3 drive_compression.py
     python3 gauge_count_study.py
 """
 import numpy as np

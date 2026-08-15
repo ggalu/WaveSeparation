@@ -24,6 +24,9 @@ Ground truth:
 
 Geometry and units (mm, ms, kg => kN, GPa; mm/ms == m/s):
     E, A                  bar Young's modulus [GPa] and cross-section [mm^2]
+    rho                   bar density [kg/mm^3]. Not used by the reduction --
+                          c0 and E*A are what that needs -- but identify_bar_tension.py
+                          checks its density closure against it.
     c0                    elastic bar wave speed [mm/ms]
     dt, dx, N             timestep [ms], element length [mm], number of steps
     iface_in, iface_out   element indices bounding the specimen
@@ -53,7 +56,7 @@ def write_dump(sim, cfg, path=DUMP_FILE):
     """Collect a finished simulator's recorded output into one .npz."""
     fields = dict(sim.rec.as_dump())
     fields.update(
-        E=sim.E_bar, A=sim.A_bar, c0=sim.c0, dt=sim.dt, dx=sim.dx0,
+        E=sim.E_bar, A=sim.A_bar, rho=sim.rho_bar, c0=sim.c0, dt=sim.dt, dx=sim.dx0,
         N=sim.num_timesteps,
         L_specimen=sim.L_specimen, A_specimen=sim.specimen_cross_section_area,
         v0_in=sim.v0_in, v0_out=sim.v0_out,
@@ -83,7 +86,7 @@ def load_dump(path=DUMP_FILE):
     """
     with np.load(path) as z:
         d = {k: z[k] for k in z.files}
-    for k in ('E', 'A', 'c0', 'dt', 'dx', 'X_IN', 'X_OUT', 'L_free_in',
+    for k in ('E', 'A', 'rho', 'c0', 'dt', 'dx', 'X_IN', 'X_OUT', 'L_free_in',
               'L_free_out', 'L_specimen', 'A_specimen', 'v0_in', 'v0_out',
               'eta'):
         d[k] = float(d[k])

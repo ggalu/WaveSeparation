@@ -2,15 +2,16 @@
 #
 # Units throughout: mm, ms, kg  =>  kN, GPa, and mm/ms (numerically m/s).
 #
-# Two cases are defined, [compression] and [tension]. They are independent --
-# different materials, different geometry, and their own gauge locations. Pick
-# one by running its driver:
+# Three cases are defined. They are independent -- different materials, different
+# geometry, and their own gauge locations. Pick one by running its driver:
 #
-#     python3 drive.py            -> [compression], direct-impact bar
-#     python3 drive_tension.py    -> [tension], SHTB with a POM striker
+#     python3 drive_compression.py         -> [compression], direct-impact bar
+#     python3 drive_tension.py             -> [tension], SHTB with a POM striker
+#     python3 drive_calibration_tension.py -> [calibration_tension], the SHTB
+#                                             bars bolted together, no specimen
 #
-# Both write the same dump.npz, so the last one run is what the analysis
-# scripts see.
+# All three write the same dump.npz, so the last one run is what the analysis
+# scripts see. Never run a simulate_*.py directly: it produces no dump.
 
 # --------------------------------------------------------------------------
 # Numerics, shared by both cases. Either case may override any of these in its
@@ -50,7 +51,7 @@ record_full_field = false
 eta = 1.0
 
 # ==========================================================================
-# COMPRESSION: 1D direct-impact bar (simulate.py)
+# COMPRESSION: 1D direct-impact bar (simulate_compression.py)
 # A moving input bar strikes a specimen resting against a stationary output bar.
 # ==========================================================================
 [compression]
@@ -116,3 +117,55 @@ JC_A = 0.06
 JC_B = 0.16
 JC_n = 0.3
 # failure_strain = 0.5            # plastic strain at failure; omit to disable
+
+# ==========================================================================
+# CALIBRATION: the two bars bolted straight together, NO specimen.
+# Run through simulate_tension.py by drive_calibration_tension.py, and analysed
+# by identify_bar_tension.py, which recovers the gauge positions and c0 from the
+# echo train alone -- see "Calibrating the bar from a connected-bar shot" in
+# README.md. The "specimen" here is ONE ELEMENT of bar material, so the joint
+# is acoustically invisible and the assembly is a single uniform bar.
+#
+# Only two things differ from [tension], and the striker is NOT one of them:
+#   * the specimen is replaced by bar material, which is the whole point;
+#   * ncyc raised, so the record holds several assembly round trips.
+# The 800 mm striker is kept deliberately -- a calibration you can only run with
+# a striker bought for the purpose is not a calibration you will run.
+# ==========================================================================
+[calibration_tension]
+loading = "tension"
+gauges = [130.0, 530.0]           # the layout being calibrated. The identify
+                                  # script is never told these and recovers them
+
+[calibration_tension.numerics]
+ncyc = 8                          # ~4 round trips of the 6001 mm assembly
+
+[calibration_tension.bar]         # same bars as [tension]
+E = 71.7
+rho = 2.81e-6
+diameter = 16.0
+L_input = 3000.0
+L_output = 3000.0
+
+[calibration_tension.striker]     # the SAME 800 mm striker as [tension]:
+E = 3.0                           # the calibration must run on the rig as
+rho = 1.41e-6                     # it is, not on a striker bought for it.
+inner_diameter = 16.1             # 2*L/c = 1097 us against a 2376 us round
+outer_diameter = 40.0             # trip, so echoes OVERLAP and the analysis
+length = 800.0                    # times edges rather than whole pulses.
+velocity = 10.0
+
+[calibration_tension.anvil]
+E = 210.0
+rho = 7.85e-6
+diameter = 40.0
+length = 20.0
+
+[calibration_tension.specimen]    # bar material and diameter = no specimen
+diameter = 16.0
+length = 1.0
+E = 71.7
+rho = 2.81e-6
+JC_A = 1.0e3                      # yield stress far above anything reachable,
+JC_B = 0.0                        # so the joint stays elastic and linear
+JC_n = 1.0

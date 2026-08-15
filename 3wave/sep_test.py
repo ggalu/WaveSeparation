@@ -9,7 +9,7 @@ The measure is the reconstructed interface force against the force the simulator
 actually carried in the bar element at each specimen face, which the dump stores
 as ground truth.
 
-    python3 drive_tension.py    (or drive.py)
+    python3 drive_tension.py    (or drive_compression.py)
     python3 sep_test.py
 """
 import numpy as np

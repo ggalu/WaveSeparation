@@ -6,7 +6,7 @@ This is raw signal inspection -- it does NOT run the wave separation. Its job is
 to show what the gauges actually record, and in particular WHEN the two
 counter-propagating waves start to overlap at each gauge.
 
-Run drive.py or drive_tension.py first to produce dump.npz, then:
+Run drive_compression.py or drive_tension.py first to produce dump.npz, then:
     python3 plot_forces.py              # shows the figure in a window
     python3 plot_forces.py --headless   # writes the .png only, no window
 

@@ -3,7 +3,7 @@
 # Remove generated simulation output and Python bytecode caches.
 #
 # Everything deleted here is reproducible with:
-#     python3 drive.py && python3 reduce_specimen.py
+#     python3 drive_compression.py && python3 reduce_specimen.py
 #
 # Usage:
 #     ./clean.sh           remove the files
@@ -25,9 +25,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Generated artefacts, listed explicitly rather than by wildcard so that a
 # stray *.npy or *.png of your own is never caught by accident.
 GENERATED=(
-    # recorded output written by drive.py / drive_tension.py
+    # recorded output written by drive_compression.py / drive_tension.py / drive_calibration_tension.py
     "dump.npz"
-    # ground truth written by simulate.py
+    # ground truth written by simulate_compression.py
     "specimen.dat"
     # superseded by dump.npz; listed so old runs get cleaned up too
     "eps.npy"
@@ -39,7 +39,9 @@ GENERATED=(
     "specimen_reconstruction.png"
     # figure written by plot_forces.py
     "gauge_forces.png"
-    # legacy outputs of the unmodified simulate.py, in case an older copy is run
+    # figure written by identify_bar_tension.py
+    "bar_identification_tension.png"
+    # legacy outputs of the unmodified simulate_compression.py, in case an older copy is run
     "eps_vel.dat"
     "u_vel.dat"
     "linescan_analysis.dat"

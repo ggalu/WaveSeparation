@@ -2,8 +2,8 @@
 """
 1D Split Hopkinson TENSION Bar (SHTB) with a tubular striker.
 
-Companion to simulate.py, which is a direct-impact COMPRESSION bar. Same lumped
-mass-spring chain, same explicit leapfrog, same output contract -- so drive.py's
+Companion to simulate_compression.py, which is a direct-impact COMPRESSION bar. Same lumped
+mass-spring chain, same explicit leapfrog, same output contract -- so drive_compression.py's
 sibling drive_tension.py produces .npy dumps the existing reduction scripts read
 without modification.
 
@@ -45,7 +45,7 @@ the anvil. Note this uses the STRIKER's wave speed, not the bar's. POM is slow
 1097 us pulse -- roughly 3.5x longer than the same tube in aluminium would.
 
 --------------------------------------------------------------------------
-Differences from simulate.py that matter downstream
+Differences from simulate_compression.py that matter downstream
 --------------------------------------------------------------------------
 * The specimen is BONDED to both bars (threaded, as a real tension specimen is),
   so the no-tension conditions at the two specimen interfaces are gone. The
@@ -162,7 +162,7 @@ class SimulateSHTB:
         x_spec0 = x_anvil1 + self.L_inputbar           # input bar | specimen
         x_spec1 = x_spec0 + self.L_specimen            # specimen | output bar
 
-        # Regions are assigned by ELEMENT CENTRE. simulate.py builds these as
+        # Regions are assigned by ELEMENT CENTRE. simulate_compression.py builds these as
         # node indices and then uses them on element arrays, which puts its
         # specimen one element to the right of nominal; that shortcut is not
         # available here because the material properties, not just the labels,
@@ -192,7 +192,7 @@ class SimulateSHTB:
 
         # Nodal masses: half of each adjacent element's mass, so a node on a
         # material junction gets the correct average and the free ends get half.
-        # (simulate.py can give every node a full element mass because its chain
+        # (simulate_compression.py can give every node a full element mass because its chain
         # is uniform; here that would put the wrong inertia on the steel node.)
         m_elem = self.rho_elem * self.A_elem * self.dx0
         self.m = np.zeros_like(self.x)
@@ -324,7 +324,7 @@ class SimulateSHTB:
         if np.any(over):
             dsig = stress[over] - yield_stress[over]
             stress[over] = yield_stress[over]
-            # return mapping uses the SPECIMEN modulus (simulate.py uses the bar
+            # return mapping uses the SPECIMEN modulus (simulate_compression.py uses the bar
             # modulus here, which is a bug preserved there for continuity)
             self.eps_plastic[over] += dsig / self.specimen_E
 

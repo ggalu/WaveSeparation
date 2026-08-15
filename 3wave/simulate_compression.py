@@ -7,7 +7,7 @@
 # mass-spring chain.
 #
 # Reduced to what the wave-separation pipeline consumes:
-#   - self.history_elems_strain, self.history_elems_force  (read by drive.py)
+#   - self.history_elems_strain, self.history_elems_force  (read by drive_compression.py)
 #   - specimen.dat                                          (ground truth for
 #     reduce_specimen.py and gauge_count_study.py)
 # All plotting, animation and the other four output files have been removed --
@@ -21,7 +21,7 @@ import config as _config
 from recording import GaugeRecorder
 
 
-class SimulateSymmpact:
+class SimulateDirectImpact:
     """
     Parameters come from the [compression] case of config.toml -- see that file
     for what each one means. Pass a config dict to override for a sweep.
@@ -45,6 +45,7 @@ class SimulateSymmpact:
         self.L_specimen = spec['length']
         self.E_bar = bar['E']
         self.rho = bar['rho']
+        self.rho_bar = self.rho     # name the dump contract shares with SimulateSHTB
         self.diameter_bar = bar['diameter']
         self.A_bar = 0.25 * np.pi * self.diameter_bar**2
         self.initial_velocity = bar['initial_velocity']
@@ -180,7 +181,7 @@ class SimulateSymmpact:
         self.dt = self.courant * self.dx0 / self.c0
         self.num_timesteps = int(endTime / self.dt)
         # arange, not linspace: this must agree sample-for-sample with the
-        # t = np.arange(N)*dt used by drive.py and the reduction scripts.
+        # t = np.arange(N)*dt used by drive_compression.py and the reduction scripts.
         self.T = np.arange(self.num_timesteps) * self.dt
 
     def initialize_spatial_mesh(self):
@@ -196,7 +197,7 @@ class SimulateSymmpact:
         # indices of input bar, specimen, output bar.
         # NOTE: built as NODE indices but used to index ELEMENT arrays, which
         # shifts the specimen to elements 2001..2010, i.e. x in [2001, 2011]
-        # rather than the nominal [2000, 2010]. Preserved as-is; drive.py
+        # rather than the nominal [2000, 2010]. Preserved as-is; drive_compression.py
         # derives the true interface planes from specimenIndices rather than
         # assuming them, so the pipeline stays consistent either way.
         specimenIndices = []
@@ -223,4 +224,4 @@ class SimulateSymmpact:
 
 
 if __name__ == "__main__":
-    simulator = SimulateSymmpact()
+    simulator = SimulateDirectImpact()

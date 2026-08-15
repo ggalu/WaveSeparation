@@ -65,7 +65,7 @@ of about 160 Hz.
 
 eta carries units of 1/time and must match the units of `t`. With t in seconds
 (as in a05.m) sensible values are a few hundred; with t in milliseconds (as in
-simulate.py) the same physical damping is a few tenths to a few units.
+simulate_compression.py) the same physical damping is a few tenths to a few units.
 
 exp(+eta*t) is applied on the way out, so eta * t_max much above ~30 overflows.
 """
@@ -357,7 +357,7 @@ def specimen_response(t, force_in, vel_in, force_out, vel_out,
         the specimen fails).
     loading : 'compression' | 'tension'
         Which sense counts as positive in the returned stress and strain.
-        'compression' (default) suits a compression bar and matches simulate.py.
+        'compression' (default) suits a compression bar and matches simulate_compression.py.
         'tension' suits an SHTB and matches simulate_tension.py: stress and
         strain come out positive in tension, and the specimen is taken to
         deform when the bar faces move APART rather than together.
