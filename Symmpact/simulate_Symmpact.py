@@ -2,7 +2,7 @@
 # @Author: Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
 # @Date:   2025-01-24 16:35:10
 # @Last Modified by:   Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
-# @Last Modified time: 2025-01-25 17:17:42
+# @Last Modified time: 2025-04-04 14:56:37
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -16,8 +16,8 @@ class SimulateSymmpact:
         self.specimen_dia = 10.0
         self.specimen_cross_section_area = 0.25 * np.pi * self.specimen_dia**2
         self.specimen_E = 70.0
-        self.JC_A = 0.08 # Johnson-Cook A
-        self.JC_B = 0.08 # Johnson-Cook B
+        self.JC_A = 0.04 # Johnson-Cook A
+        self.JC_B = 0.04 # Johnson-Cook B
         self.JC_n = 0.3  # Johnson-Cook n
 
         # set up initial conditions : bar
@@ -32,7 +32,7 @@ class SimulateSymmpact:
         self.A_bar = 0.25 * np.pi * self.diameter_bar**2
         self.damping = 0.01
         self.initial_velocity = 5.0
-        self.N_cycles = 4 # simulate this many wave-pingpongs in a bar
+        self.N_cycles = 6 # simulate this many wave-pingpongs in a bar
 
         self.initialize_spatial_mesh()
         self.initialize_time_discretization()
@@ -43,14 +43,6 @@ class SimulateSymmpact:
 
         self.extract_discrete_results()
         #self.animate_results()
-        
-
-        # ... iterate over timesteps
-        #self.
-
-        # ... write out data
-
-        # ... plot results
 
     def integrate_time(self):
         """
@@ -97,6 +89,7 @@ class SimulateSymmpact:
             # third part of leapfrog: update velocities with new accelerations
             self.v += 0.5 * self.f * self.dt / self.nodal_mass
 
+            self.history_nodal_displacement[:,i] = self.x - self.x0
             self.history_nodal_vel[:,i] = self.v # save velocity for later retrieval in history array
             self.history_elems_force[:,i] = element_forces
             self.history_elems_stress[:,i] = stress
@@ -147,12 +140,13 @@ class SimulateSymmpact:
         self.sigA,   self.sigB   = self.history_elems_stress[self.idxA,:], self.history_elems_stress[self.idxB,:]
         self.forceA, self.forceB = self.history_elems_force[self.idxA,:], self.history_elems_force[self.idxB,:]
 
-        # interpolate nodal velocities to strain gauge locations
+        # interpolate nodal velocities and displacements to strain gauge locations
         # N_i ---- Element_i ----- N_i+1
         # let's have and additional errorneous offset between strain and velocity measurment
         offset = int(0.0 / self.dx0)
         velA = 0.5 * (self.history_nodal_vel[self.idxA+offset,:] + self.history_nodal_vel[self.idxA+offset + 1,:])
         velB = 0.5 * (self.history_nodal_vel[self.idxB,:] + self.history_nodal_vel[self.idxB + 1,:])
+        uB   = 0.5 * (self.history_nodal_displacement[self.idxB,:] + self.history_nodal_displacement[self.idxB + 1,:])
 
         # compute average specimen strain
         #print("specimen indices:", specimenIndices)
@@ -165,6 +159,16 @@ class SimulateSymmpact:
         np.savetxt("eps_vel.dat", data)
         print("... wrote strain and velocity signals to file eps_vel.dat")
 
+        # write output bar strain gauge information to file -- mimic Symmpact_AnalyseExperiment_OnlyOut1.py output
+        data = np.column_stack((self.T, -self.forceB))
+        np.savetxt("Symmpact_time_force.txt", data)
+        print("... wrote Symmpact_time_force.txt")
+
+        # write output bar velocity to file -- mimic LineScanAnalysis.py output
+        data = np.column_stack((self.T, uB))
+        np.savetxt("linescan_analysis.dat", data)
+        print("... linescan_analysis.dat")
+
         # write specimen stress and strain to file
         data = np.column_stack((self.T, self.sigS, self.epsS))
         np.savetxt("specimen.dat", data)
@@ -172,12 +176,12 @@ class SimulateSymmpact:
 
         px = 1/plt.rcParams['figure.dpi']  # pixel in inches
         fig = plt.figure(figsize=(1200*px, 800*px))
-        gs = fig.add_gridspec(2, hspace=1)
+        gs = fig.add_gridspec(2, hspace=0.1)
         axs = gs.subplots(sharex=False, sharey=False)
 
-        axs[0].plot(self.T, self.forceA, label="force@A")
-        axs[0].plot(self.T, self.forceB, label="force@B")
-        axs[0].plot(self.T, self.forceS, label="force@S")
+        axs[0].plot(self.T, -self.forceA, label="force @ inputbar")
+        axs[0].plot(self.T, -self.forceB, label="force @ outputbar")
+        axs[0].plot(self.T, -self.forceS, label="force @ specimen")
 
         #axs[0].plot(self.T, self.sigA, label="sig@A")
         #axs[0].plot(self.T, self.sigB, label="sig@B")
@@ -211,10 +215,11 @@ class SimulateSymmpact:
         """
         Initialize the history variables used to save simulation results.
         """
-        self.history_nodal_vel =        np.zeros((self.N_x+1, self.num_timesteps),float) # Global solution
-        self.history_elems_force =  np.zeros((self.N_x,   self.num_timesteps),float) # This is the force on the cross-section  of each element
-        self.history_elems_stress = np.zeros((self.N_x,   self.num_timesteps),float) # This is the stress  on each element
-        self.history_elems_strain = np.zeros((self.N_x,   self.num_timesteps),float) # This is the strain  on each element
+        self.history_nodal_displacement = np.zeros((self.N_x+1, self.num_timesteps),float) # Global solution
+        self.history_nodal_vel =          np.zeros((self.N_x+1, self.num_timesteps),float) # Global solution
+        self.history_elems_force =        np.zeros((self.N_x,   self.num_timesteps),float) # This is the force on the cross-section  of each element
+        self.history_elems_stress =       np.zeros((self.N_x,   self.num_timesteps),float) # This is the stress  on each element
+        self.history_elems_strain =       np.zeros((self.N_x,   self.num_timesteps),float) # This is the strain  on each element
 
     def initialize_time_discretization(self):
         self.c0 = np.sqrt(self.E_bar/self.rho)
@@ -240,6 +245,7 @@ class SimulateSymmpact:
         self.v = np.zeros_like(self.x) # nodal velocity
         self.f = np.zeros_like(self.x) # nodal forces
         self.dx0 = self.x[1] - self.x[0] # initial length of each spring
+        self.x0 = 1.0 * self.x # store initial coordinates to compute displacement
 
         # indices of input bar, specimen, ouput bar nodes
         specimenIndices = []
@@ -279,23 +285,6 @@ class SimulateSymmpact:
         mass_per_length = self.rho * self.A_bar # this is the mass per unit length (1 mm)
         self.nodal_mass = mass_per_length * self.dx0
         print("nodal mass:", self.nodal_mass)
-
-    def initialize_variables(self):
-        #Temporal mesh with CFL < 1 - j indices
-        self.endTime = self.N_cycles * 2 * self.L_inputbar / self.c0 #
-        self.dt = 0.5 * dx0 / self.c0  # timestep
-        num_timesteps = int(self.endTime/self.dt) #Points number of the temporal mesh
-        self.T = np.linspace(0,self.endTime,num_timesteps) #Temporal array
-
-        self.history_nodal_vel = np.zeros((N_x+1,num_timesteps),float) #Global solution
-        self.history_elems_force = np.zeros((N_x,num_timesteps),float) # This is the force on the cross-section of each element
-        self.history_elems_stress = np.zeros((N_x,num_timesteps),float) # This is the stress on each element
-        self.history_elems_strain = np.zeros((N_x,num_timesteps),float) # This is the strain on each element
-
-        self.force = np.zeros_like(x) # force
-
-        # apply initial velocity to left bar
-        self.v[inputBarIndices] = initial_velocity
 
     
 

@@ -2,7 +2,7 @@
 # @Author: Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
 # @Date:   2024-05-01 17:17:57
 # @Last Modified by:   Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
-# @Last Modified time: 2025-01-31 11:25:25
+# @Last Modified time: 2025-04-01 16:37:54
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -25,7 +25,12 @@ import glob
 sys.path.append("../") 
 
 
-path = "/home/gcg/Projekte/21_WaveSeparation/2025-01-30_Waveseparation/02_PC"
+#path = "/home/gcg/Projekte/21_WaveSeparation/2025-01-30_Waveseparation/02_PC"
+path = "/home/gcg/Projekte/21_WaveSeparation/2025-03-27_Waveseparation/1_plain_pulse_1bar/"
+path = "/home/gcg/Projekte/21_WaveSeparation/2025-03-27_Waveseparation/2_blue_foam_1bar"
+path = "/home/gcg/Projekte/21_WaveSeparation/2025-03-27_Waveseparation/4_PC_1bar"
+path = "/home/gcg/Projekte/21_WaveSeparation/2025-03-27_Waveseparation/5_PC_2bar"
+path = "/home/gcg/Projekte/21_WaveSeparation/2025-03-27_Waveseparation/6_PC_3bar"
 
 #filename_in = sys.argv[1]
 #print("input filename:", filename_in)
@@ -36,7 +41,6 @@ shiftThreshold = 0.5
 validDuration = 2 * 1900 / 5090 # valid Duration of experiment -- wave transit time in bars. This is for Alu, c0 = 5090 mm / ms
 
 class AnalyzeSHTBExperiment():
-    
     
     def __init__(self, path):
         

@@ -2,7 +2,7 @@
 # @Author: Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
 # @Date:   2025-01-27 17:50:34
 # @Last Modified by:   Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
-# @Last Modified time: 2025-01-31 14:33:47
+# @Last Modified time: 2025-03-29 10:28:11
 import numpy as np
 import copy
 import pylab as plt
@@ -151,13 +151,13 @@ if __name__ == "__main__":
     #image_data = skimage.filters.gaussian(image_data, sigma=(1.0, 0)) # scharfe Übergänge sichtbar
     image_data = skimage.filters.gaussian(image_data, sigma=(0, 2))
 
-    x = np.arange(len(image_data))
+    time = np.arange(len(image_data)) / 200.0
 
     plt.imshow(image_data)
-    plt.show()
+    plt.show()        
     image_data = image_data.astype(np.float32) #[2300:2400,:].astype(np.float32)
-    tracker = TrackROI(image_data, 485, 1740)
+    tracker = TrackROI(image_data, 132, 1420)
 
     filename_out = "/home/gcg/Projekte/21_WaveSeparation/2025-01-30_Waveseparation/02_PC/linescan_analysis.dat"
-    np.savetxt(filename_out, np.column_stack((x, tracker.displacements)))
+    np.savetxt(filename_out, np.column_stack((time, tracker.displacements)))
     print("wrote output file linescan_analysis.dat as [%s]" % (filename_out))
