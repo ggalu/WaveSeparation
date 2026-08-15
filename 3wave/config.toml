@@ -1,0 +1,107 @@
+# Single source of truth for both simulators and for the analysis scripts.
+#
+# Units throughout: mm, ms, kg  =>  kN, GPa, and mm/ms (numerically m/s).
+#
+# Two cases are defined, [compression] and [tension]. They are independent --
+# different materials, different geometry, and their own gauge locations. Pick
+# one by running its driver:
+#
+#     python3 drive.py            -> [compression], direct-impact bar
+#     python3 drive_tension.py    -> [tension], SHTB with a POM striker
+#
+# Both write the same dump.npz, so the last one run is what the analysis
+# scripts see.
+
+# --------------------------------------------------------------------------
+# Numerics, shared by both cases. Either case may override any of these in its
+# own [<case>.numerics] table.
+# --------------------------------------------------------------------------
+[numerics]
+courant = 0.5           # dt = courant * dx / c_max ; 1.0 is the stability limit
+damping = 0.01          # artificial viscosity coefficient
+ncyc = 3                # wave round-trips simulated; 3 keeps FFT truncation
+                        # out of the analysis window (2 is visibly worse)
+dx = 1.0                # element length [mm]
+
+# Opt-in: also store strain and force for EVERY element at EVERY timestep.
+# This is what the code used to do unconditionally, and it is expensive --
+# the tension case is 6030 x 36861, i.e. 3.6 GB in memory and 1.8 GB on disk.
+# Leave false unless you need the full field (animation, Lagrange diagram).
+record_full_field = false
+
+# --------------------------------------------------------------------------
+# Analysis parameters, read by the reduction scripts rather than the simulators
+# --------------------------------------------------------------------------
+[analysis]
+# Exponential-window (Laplace) damping for separate(), units 1/ms. Stress is
+# nearly insensitive to it; strain is not, because it is integrated. Tune on
+# the strain. See the regularisation notes in wave_separation.py.
+eta = 1.0
+
+# ==========================================================================
+# COMPRESSION: 1D direct-impact bar (simulate.py)
+# A moving input bar strikes a specimen resting against a stationary output bar.
+# ==========================================================================
+[compression]
+loading = "compression"
+gauges = [130.0, 530.0]           # gauge distance from the interface [mm]
+
+[compression.bar]
+E = 70.0
+rho = 2.7e-6
+diameter = 16.0
+L_input = 2000.0
+L_output = 2000.0
+initial_velocity = 10.0           # the input bar arrives at this speed
+
+[compression.specimen]
+diameter = 8.0
+length = 10.0
+E = 2.4
+JC_A = 0.06                       # Johnson-Cook A
+JC_B = 0.16                       # Johnson-Cook B
+JC_n = 0.3                        # Johnson-Cook n
+elastic_only = false              # true disables the specimen's plasticity
+
+# ==========================================================================
+# TENSION: Split Hopkinson tension bar (simulate_tension.py)
+# A hollow POM striker rides on the input bar, is launched away from the
+# specimen, and strikes a steel anvil at the bar's far end.
+# ==========================================================================
+[tension]
+loading = "tension"
+gauges = [130.0, 530.0]
+
+[tension.bar]                     # 7075-T6 aluminium
+E = 71.7
+rho = 2.81e-6
+diameter = 16.0
+L_input = 3000.0
+L_output = 3000.0
+
+[tension.striker]                 # POM (polyoxymethylene / acetal) tube
+E = 3.0
+rho = 1.41e-6
+inner_diameter = 16.1             # clearance fit over the 16 mm bar
+outer_diameter = 40.0
+length = 800.0                    # sets the pulse length, 2*L/c_striker.
+                                  # POM is 3.5x slower than aluminium, so
+                                  # 800 mm gives 1097 us, not 314 us.
+velocity = 10.0                   # toward the anvil, away from the specimen
+
+[tension.anvil]                   # steel disc, rigidly attached to the input bar
+E = 210.0
+rho = 7.85e-6
+diameter = 40.0
+length = 20.0
+
+[tension.specimen]
+diameter = 5.0
+length = 10.0
+E = 2.4
+rho = 2.81e-6                     # only the specimen's inertia depends on this,
+                                  # and it is short: assume the bar alloy
+JC_A = 0.06
+JC_B = 0.16
+JC_n = 0.3
+# failure_strain = 0.5            # plastic strain at failure; omit to disable
