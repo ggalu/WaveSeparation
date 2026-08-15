@@ -695,9 +695,37 @@ python3 drive_calibration_tension.py    # ~5 s  -> dump.npz
 python3 identify_bar_tension.py         # the identification
 ```
 
-`[calibration_tension]` in `config.toml` is the SHTB with the specimen replaced by one
-element of bar material, so the joint reflects nothing and the assembly is a
-single uniform bar. It keeps the **same 800 mm striker** as `[tension]`: a
+The one number you must supply is `xi_ref`, the tape measurement from a gauge to
+the far free end. It lives in `[calibration_tension]`:
+
+```toml
+xi_ref = 3679.5           # in-1 -> far free end [mm]
+xi_ref_gauge = "in-1"     # which gauge the tape reached; omit = the reference
+xi_ref_tol = 2.0          # what the tape is good to [mm]
+```
+
+with `--xi-ref` / `--xi-ref-tol` overriding them for a sensitivity sweep without
+editing the file:
+
+```bash
+python3 identify_bar_tension.py --xi-ref 3681.5     # a +2 mm tape error
+python3 identify_bar_tension.py --xi-ref-tol 0.5    # a better tape
+```
+
+**Omit `xi_ref` entirely and the script falls back to the model's own geometry** —
+which a simulation can supply and a rig cannot. That fallback is the self-check
+mode; supplying `xi_ref` is what turns this into an instrument. Any gauge may
+carry the tape: `xi_k = xi_ref (1 − 2·lag_k/Q)` inverts to refer the reading back
+to whichever gauge the record picks as reference, at the cost of dividing the
+tolerance by that same factor — measuring `out-1` instead of `in-1` on this rig
+inflates ±2.0 mm to ±3.0 mm. Because the configured value depends on the gauge
+layout and the bar lengths, the script cross-checks it against the model geometry
+and warns when the two disagree by more than `xi_ref_tol`.
+
+`[calibration_tension]` in `config.toml` is the SHTB with the specimen replaced by the
+rig's own 150 mm threaded coupler, in bar stock at bar diameter, so the joint
+reflects nothing and the assembly is a single uniform bar 150 mm longer than the
+two bars. It keeps the **same 800 mm striker** as `[tension]`: a
 calibration you can only run with a striker bought for the purpose is not a
 calibration you will run. `identify_bar_tension.py` is **never told the gauge positions**
 — it recovers them.
@@ -723,15 +751,15 @@ free end. Call it `xi_ref`. Everything else is leverage:
 \frac{\delta c_0}{c_0} \;=\; \frac{\delta D}{D} \;=\; \frac{\delta \xi_\text{ref}}{\xi_\text{ref}}
 ```
 
-**The point is the ratio `xi_ref/D`**, which is 8.8 here. A tape measurement good
-to ±2 mm over the 3530 mm reference baseline lands `D` to ±0.23 mm on a 400 mm
+**The point is the ratio `xi_ref/D`**, which is 9.2 here. A tape measurement good
+to ±2 mm over the 3680 mm reference baseline lands `D` to ±0.22 mm on a 400 mm
 spacing. A sloppy measurement on a long baseline buys a sharp one on a short
 baseline — and the short baseline is precisely the one you cannot measure.
 
 Nothing assumes the two bars are instrumented symmetrically. The script
 **measures** the asymmetry of each nominal pair instead and reports it; on the
-shipped layout it recovers the true 0.000 mm to within 0.23 mm, so it would
-catch a real mismatch.
+shipped layout it recovers the true −1.000 mm (a mesh-rounding artefact, not a
+real offset) to within 0.28 mm, so it would catch a real mismatch.
 
 The trade is better still because of what the reduction consumes. In `separate`
 the positions enter only as $\xi x_k = (\omega - i\eta)x_k/c_0$, so the result
@@ -749,7 +777,7 @@ striker momentum, and treat `rho` as a by-product.
 
 ### Why edges, not pulses
 
-The 800 mm striker gives a 1097 us pulse against a 2376 us assembly round trip,
+The 800 mm striker gives a 1097 us pulse against a 2435 us assembly round trip,
 so **the free-end echo arrives while the direct pulse is still passing** — at the
 gauge nearest the free end it arrives 118 us before the direct pulse has even
 ended. Matched-filtering whole pulses, which is the obvious approach and works
@@ -777,7 +805,7 @@ each other the gauge shows one merged peak instead of two — `out-0` does, at 4
 separation — and it is simply dropped from the `c0` average. Its position still
 comes through, because that is derived from the gauge-to-gauge lag, which is
 always clean. The consistency check makes the rejection automatic: `Q = 2 xi/c0 +
-2·lag` must be identical at every gauge, and the three good ones agree to **0.1 us**
+2·lag` must be identical at every gauge, and the three good ones agree to **0.07 us**
 while the merged one is out by a factor of three.
 
 ### Only the free end is used
@@ -798,18 +826,119 @@ needed at all — the bar's own length does the job.
 | quantity | identified | true | error |
 |---|---|---|---|
 | striker pulse `P` | 1095.2 us | 1096.9 | −1.6e-03 |
-| `c0` | 5049.295 mm/ms | 5051.338 | **−4.0e-04** |
-| gauge in-0 | 129.40 mm | 129.50 | −0.097 mm |
+| `c0` | 5049.419 mm/ms | 5051.338 | **−3.8e-04** |
+| gauge in-0 | 129.39 mm | 129.50 | −0.107 mm |
 | gauge in-1 | *reference* | 529.50 | — |
-| gauge out-0 | 129.64 mm | 129.50 | +0.137 mm |
-| gauge out-1 | 529.68 mm | 529.50 | +0.178 mm |
-| `D`, input / output | 400.097 / 400.042 mm | 400.00 | **+0.10 / +0.04 mm** |
-| transit times `x/c0` | — | — | −3.5e-04 to +1.5e-03 |
-| `E` from `rho c0^2` | 71.642 GPa | 71.700 | −8.1e-04 |
+| gauge out-0 | 130.67 mm | 130.50 | +0.174 mm |
+| gauge out-1 | 530.72 mm | 530.50 | +0.219 mm |
+| `D`, input / output | 400.107 / 400.045 mm | 400.00 | **+0.11 / +0.04 mm** |
+| transit times `x/c0` | — | — | −4.5e-04 to +1.7e-03 |
+| `E` from `rho c0^2` | 71.646 GPa | 71.700 | −7.6e-04 |
 
 Those are the errors the **timing** costs, with `xi_ref` exact. On a rig the tape
-error multiplies through on top: ±2 mm on the reference baseline adds ±5.7e-04
-relative, i.e. ±2.9 mm/ms on `c0` and ±0.23 mm on `D`.
+error adds on top — but not uniformly, and the distinction matters:
+
+| quantity | tape band | why |
+|---|---|---|
+| `c0`, `D`, `xi` | ±5.4e-04 **relative** (±2.7 mm/ms, ±0.22 mm) | they scale with `xi_ref` |
+| gauge positions `x` | **±1.34 to ±2.00 mm absolute** | `x = xi +` a constant the tape never touches |
+
+The leverage ratio `xi_ref/D` = 9.2 is what makes the first row small. **It does
+nothing for the second.** Each gauge's band is reported in the `±tape` column of
+the positions table. In practice this is benign — a common offset mostly moves
+where the wave is reconstructed rather than distorting it, and `D`, which the
+reduction actually leans on, is in the first row — but earlier versions of this
+section quoted the relative figure for positions too, and that was wrong.
+
+### What a mismatched coupler costs
+
+The coupler is bar stock at bar diameter, so acoustically it is not there and
+only its **length** enters — set `length` in `[calibration_tension.specimen]` to
+the real figure and nothing else about it matters. Length alone is harmless: at
+150 mm of genuine bar material the identification is indistinguishable from the
+1 mm case (`c0` −3.8e-04 against −4.0e-04, `D` +0.11 mm against +0.10 mm).
+
+An **impedance** step is a different matter, and the failure is silent. Measured,
+with a 150 mm coupler at 0.9× bar density (`E` unchanged, so 5.4 % faster and a
+2.6 % reflection at each face):
+
+| | 150 mm, bar material | 150 mm, 0.9 ρ |
+|---|---|---|
+| `c0` | −3.8e-04 | **+1.7e-03** |
+| `D`, input / output | +0.11 / +0.05 mm | **+0.97 / +0.88 mm** |
+| worst gauge position | +0.22 mm | **−5.87 mm** |
+| worst transit time | +1.6e-03 | **−4.7e-02** |
+| `Q` spread (the self-check) | 4.6e-05 | 4.3e-05 — *no warning* |
+| reported bar asymmetry | −1.28 mm (true −1.00) | **+3.90 mm (true −1.00)** |
+
+Every path that crosses the coupler runs short by `L*(1/c_bar − 1/c_joint)` =
+1.52 µs here. An input gauge's echo crosses it twice; an output gauge's echo
+never crosses it but its lag to the reference does, and `Q` doubles that lag. So
+**`Q` picks up the same −3.05 µs at every gauge** — predicted −3.048, measured
+−3.040 — and the one internal consistency check the script has is blind to the
+error *by construction*. The `Q` spread even improves.
+
+What does break the symmetry is that the bias enters output-gauge lags and not
+input-gauge lags, so the output bar's gauges shift ~5.9 mm toward the free end.
+**The asymmetry table is the only detector**, and it only helps if you know the
+true asymmetry independently. On a rig where you do not, swap the bars end for
+end and re-run: a real asymmetry changes sign, a coupler artefact does not.
+
+A threaded connection in bar stock imposes a small impedance change of this kind
+and is neglected here. Scale from the table above: the bias is proportional to
+the coupler length times the wave-speed mismatch, so a short thread engagement in
+matched material is a second-order effect — but a steel coupler on aluminium bars
+would not be.
+
+### The free-end null test
+
+Every check above compares against the simulator's truth, which a rig does not
+have. **This one does not.** The far end of the output bar is a free surface, so
+the stress there is zero at all times:
+
+```math
+\varepsilon_+ + \varepsilon_- = 0 \qquad\text{at}\qquad \xi = 0
+```
+
+Hand `separate` the identified `xi` — distances *from that surface* — and the
+boundary condition becomes a residual that should vanish. It consumes nothing but
+the record and the identified numbers, which makes it the only validation in the
+script that survives contact with a real bar. It runs automatically and prints a
+PASS/FAIL, and the bottom two panels of `bar_identification_tension.png` show it:
+`ε₊` and `ε₋` as mirror images, then their sum against the threshold band.
+
+| `xi`, `c0` from | rms residual |
+|---|---|
+| simulator truth (the floor — numerical dispersion) | 7.86e-04 |
+| **`identify_bar_tension.py`** | **1.21e-03** — PASS |
+| 150 mm coupler at 0.9 ρ | 3.51e-03 — FAIL |
+| a 1 % uniform transit-time error | 2.6e-02 |
+
+Three things are worth knowing before leaning on it.
+
+**It cannot break the scale degeneracy.** Scaling `xi` and `c0` together leaves
+the residual identical to seven digits — verified at λ = 0.95, 1.00, 1.05. It
+constrains the transit times `xi/c0` and nothing else, which is exactly what
+`separate` consumes and exactly what `xi_ref` cannot fix. A FAIL never implicates
+your tape measurement.
+
+**It is a coarse screen, not a precision check.** It separates a good calibration
+from the mismatched coupler by only 2.9×, because the null constrains `xi/c0` over
+baselines of *metres*, where the coupler's bias is relatively small. The damage
+downstream lands on `x/c0` over baselines of ~130 mm, where the same absolute
+error is 20× larger in relative terms. **Treat a FAIL as conclusive and a PASS as
+weak evidence.** It is still the only thing that responds at all to a mismatched
+coupler — the `Q` spread provably cannot, since the coupler's extra transit time
+enters `Q` identically at every gauge.
+
+**Windowing is not optional.** Over the *full* record the residual reads 1.2e-01,
+a hundred times its true value, because the exponential window that regularises
+`separate` amplifies the truncation at the end of the record. `null_window` cuts
+the tail; without it a perfect calibration reports failure.
+
+`null_window` and `null_tol` live in `[calibration_tension]`. On a real bar
+Pochhammer–Chree dispersion raises the floor above 7.9e-04, so measure the floor
+with known-good numbers and set `null_tol` to about 3× what you get.
 
 ### It is good enough, end to end
 
@@ -954,7 +1083,7 @@ specimen reduction, which is what the floor is actually made of.
 | File | Purpose |
 |---|---|
 | `wave_separation.py` | **The library — use this one.** `separate`, `backpropagate`, `bar_interface`, `specimen_response`, `conditioning`, `single_wave_window`. numpy only. |
-| `config.toml` | **All parameters, both cases** — materials, geometry, gauge locations, numerics, `eta`. |
+| `config.toml` | **All parameters, both cases** — materials, geometry, gauge locations, numerics, `eta`, and the calibration's `xi_ref`. |
 | `config.py` | Reads and validates `config.toml`. stdlib `tomllib`, no dependency. |
 | `recording.py` | Records only the gauge / interface / specimen rows. Resolves gauge distance → element, once, for both simulators. |
 | `dump.py` | Writes and reads `dump.npz`. Its docstring lists every field. |
@@ -963,7 +1092,7 @@ specimen reduction, which is what the floor is actually made of.
 | `drive_compression.py` | Runs `simulate_compression.py`, writes `dump.npz`. Three lines — it sets nothing. |
 | `drive_tension.py` | Same for `simulate_tension.py`. Writes the same filename — the dumps overwrite each other. |
 | `drive_calibration_tension.py` | Runs the connected-bar calibration shot (`[calibration_tension]`, no specimen) through `simulate_tension.py`. |
-| `identify_bar_tension.py` | Recovers gauge positions, spacing `D` and `c0` from that shot's echo train. Never reads the configured gauge list. |
+| `identify_bar_tension.py` | Recovers gauge positions, spacing `D` and `c0` from that shot's echo train. Never reads the configured gauge list. Needs one measured length: `xi_ref` in `config.toml`, or `--xi-ref`. |
 | `reduce_specimen.py` | Full chain: gauges → specimen stress/strain, validated against the simulator's own measurement. `--headless` to skip the window. |
 | `plot_forces.py` | Raw gauge forces vs average specimen force. Shows when wave overlap begins. |
 | `gauge_count_study.py` | How many gauges per bar are needed; compares 3+3, 2+3, 1+2, 1+1. |

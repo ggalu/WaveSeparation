@@ -123,11 +123,13 @@ JC_n = 0.3
 # Run through simulate_tension.py by drive_calibration_tension.py, and analysed
 # by identify_bar_tension.py, which recovers the gauge positions and c0 from the
 # echo train alone -- see "Calibrating the bar from a connected-bar shot" in
-# README.md. The "specimen" here is ONE ELEMENT of bar material, so the joint
-# is acoustically invisible and the assembly is a single uniform bar.
+# README.md. The "specimen" here is the real 150 mm threaded COUPLER, in bar
+# material, so the joint is acoustically invisible and the assembly is a single
+# uniform bar 150 mm longer than the two bars.
 #
 # Only two things differ from [tension], and the striker is NOT one of them:
-#   * the specimen is replaced by bar material, which is the whole point;
+#   * the specimen is replaced by the coupler, in bar material, which is the
+#     whole point;
 #   * ncyc raised, so the record holds several assembly round trips.
 # The 800 mm striker is kept deliberately -- a calibration you can only run with
 # a striker bought for the purpose is not a calibration you will run.
@@ -137,8 +139,50 @@ loading = "tension"
 gauges = [130.0, 530.0]           # the layout being calibrated. The identify
                                   # script is never told these and recovers them
 
+# THE one measured length. A strain record is invariant under
+# (all lengths, c0) -> (lambda * all lengths, lambda * c0), so the shot fixes
+# the geometry only up to one overall scale and exactly one length must come
+# from outside. This is it: gauge -> far free end, by tape.
+#
+# Omit xi_ref entirely and identify_bar_tension.py falls back to the model's own
+# geometry, which a simulation can supply and a rig cannot -- that is the
+# self-check mode, not the instrument. Override either value on the command line
+# (--xi-ref / --xi-ref-tol) to sweep the sensitivity without editing this file.
+#
+# NOTE this value depends on the gauge layout and the bar lengths above. Change
+# either and it goes stale; the script cross-checks it against the model
+# geometry and warns when the two disagree by more than xi_ref_tol.
+xi_ref = 3679.5                   # in-1 -> far free end [mm]
+xi_ref_gauge = "in-1"             # which gauge the tape reached. Any gauge will
+                                  # do -- the script refers it to whichever one
+                                  # the record picks as reference -- but the
+                                  # longest baseline gives the best leverage.
+                                  # Omit to mean "whichever is the reference".
+xi_ref_tol = 2.0                  # what the tape is actually good to [mm].
+                                  # Propagated to every result; it dominates.
+
+# Free-end null test. The far end of the output bar is a free surface, so the
+# stress there is zero and the two separated waves must cancel. It is the only
+# check in identify_bar_tension.py that consults no ground truth, so it is the
+# only one that still works on a rig.
+null_window = 0.75                # fraction of the record to keep. The tail MUST
+                                  # be cut: the exponential window amplifies the
+                                  # record-end truncation and inflates the
+                                  # residual ~100x on a calibration that is good.
+null_tol = 2.5e-3                 # pass threshold on the rms residual. Measured:
+                                  #   7.9e-4  floor, exact inputs (dispersion)
+                                  #   1.2e-3  a good identification
+                                  #   3.5e-3  150 mm coupler at 0.9 rho
+                                  #   2.6e-2  a 1 % uniform transit-time error
+                                  # i.e. ~3x the floor, which separates good from
+                                  # the mismatched coupler by only 2.9x. This is
+                                  # a coarse screen, not a precision check. On a
+                                  # real bar Pochhammer-Chree dispersion raises
+                                  # the floor: measure it with known-good numbers
+                                  # and set this to ~3x what you get.
+
 [calibration_tension.numerics]
-ncyc = 8                          # ~4 round trips of the 6001 mm assembly
+ncyc = 8                          # ~4 round trips of the 6150 mm assembly
 
 [calibration_tension.bar]         # same bars as [tension]
 E = 71.7
@@ -161,11 +205,15 @@ rho = 7.85e-6
 diameter = 40.0
 length = 20.0
 
-[calibration_tension.specimen]    # bar material and diameter = no specimen
-diameter = 16.0
-length = 1.0
-E = 71.7
-rho = 2.81e-6
+[calibration_tension.specimen]    # the threaded coupler: bar material and bar
+diameter = 16.0                   # diameter, so acoustically it is not there
+length = 150.0                    # the real coupler length. Must be RIGHT: any
+                                  # impedance step here biases the whole
+                                  # identification in proportion to
+                                  # length*(1/c_bar - 1/c_joint) -- see
+                                  # "What a mismatched coupler costs" in README.
+E = 71.7                          # bar material: the threads impose a small
+rho = 2.81e-6                     # impedance change, deliberately neglected
 JC_A = 1.0e3                      # yield stress far above anything reachable,
 JC_B = 0.0                        # so the joint stays elastic and linear
 JC_n = 1.0
