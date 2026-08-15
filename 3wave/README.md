@@ -108,84 +108,278 @@ the two recoverable.
 
 ### The model, per gauge
 
-Each bar is treated in its own local coordinate `x`, measured from the specimen
-interface and positive going *into* the bar. Strain at a gauge at distance `x_k`
+Each bar is treated in its own local coordinate $x$, measured from the specimen
+interface and positive going *into* the bar. Strain at a gauge at distance $x_k$
 is the superposition of the two travelling waves evaluated at that point:
 
-```
-E_k(w) = P(w)·exp(-i·xi·x_k)  +  M(w)·exp(+i·xi·x_k)
-         ^ away from specimen     ^ toward specimen
+```math
+\varepsilon_k(\omega) \;=\; \underbrace{P(\omega)\,e^{-i\xi x_k}}_{\text{away from specimen}}
+             \;+\; \underbrace{M(\omega)\,e^{+i\xi x_k}}_{\text{toward specimen}}
 ```
 
-`xi = (w - i·eta)/c_p` is the complex wavenumber. Its imaginary part is where the
-exponential window `exp(-eta·t)`, applied before the FFT, enters: it shifts the
-transform off the real frequency axis.
+where
 
-The unknowns `P` and `M` are the two waves **at x = 0**, the interface. Every
+```math
+\xi \;=\; \frac{\omega - i\eta}{c_p}
+```
+
+is the complex wavenumber. Its imaginary part is where the exponential window
+$e^{-\eta t}$, applied before the FFT, enters: it shifts the transform off the
+real frequency axis.
+
+The unknowns $P$ and $M$ are the two waves **at $x = 0$**, the interface. Every
 gauge sees the same two unknowns — only the phase factors differ.
+
+### Where the Laplace transform is hiding
+
+The method is described as Laplace-domain, yet the code calls nothing but
+`np.fft.rfft` and `np.fft.irfft`. There is no contradiction: **multiplying by
+$e^{-\eta t}$ before a Fourier transform *is* a Laplace transform.** Writing the
+one-sided Laplace transform with $s = \eta + i\omega$,
+
+```math
+\mathcal{L}\{f\}(s) = \int_0^\infty \! f(t)\,e^{-st}\,dt
+                    = \int_0^\infty \! \underbrace{f(t)\,e^{-\eta t}}_{\text{the window}}
+                      e^{-i\omega t}\,dt
+                    = \mathcal{F}\bigl\{f\,e^{-\eta t}\bigr\}(\omega)
+```
+
+So the two lines in `separate`
+
+```python
+win = np.exp(-eta * tau)
+E   = np.fft.rfft(s * win, n_fft)
+```
+
+evaluate the Laplace transform along the **vertical line $\mathrm{Re}(s) = \eta$**
+in the complex $s$-plane — the Bromwich contour. The FFT supplies the $i\omega$
+sweep along that line; the window supplies the offset $\eta$ from the imaginary
+axis. Verified against a case with a known transform: for $f = e^{-at}$ the
+windowed FFT reproduces $1/(s+a)$ to 2e-04 (rectangle-rule discretisation error).
+
+**$\xi$ is that same $s$ in disguise.** A wave travelling at $c_p$ carries the
+Laplace-domain propagator $e^{-s x/c_p}$, and
+
+```math
+e^{-s x / c_p} = e^{-(\eta + i\omega)x/c_p} = e^{-i\xi x},
+\qquad
+\xi = \frac{\omega - i\eta}{c_p} = \frac{s}{i\,c_p}
+```
+
+which is exactly the wavenumber used above. The inverse is the matching pair:
+`irfft` followed by multiplication by $e^{+\eta t}$ is a discretised Bromwich
+integral — the Fourier-series (Dubner–Abate / Durbin) method of numerical Laplace
+inversion.
+
+Setting $\eta = 0$ collapses $s$ onto the imaginary axis and the whole thing
+degenerates to an ordinary Fourier transform. That is permitted arithmetically
+and fatal numerically: on the imaginary axis the system determinant vanishes at
+DC and at every half-wavelength-commensurate frequency. **Stepping off the real
+frequency axis is the entire purpose of the window** — the regularisation and the
+Laplace transform are the same act.
+
+It is not free. The inversion multiplies by $e^{+\eta t}$, which amplifies
+whatever sits at the end of the record, so the window is only invertible while
+$\eta T$ stays modest:
+
+| $\eta T$ | $e^{+\eta T}$ | round-trip error |
+|---|---|---|
+| 0 | 1 | 3e-16 |
+| 5 | 1.5e+02 | 2e-14 |
+| 10 | 2.2e+04 | 4e-12 |
+| 30 | 1.1e+13 | 1e-03 |
+| 70 | 2.5e+30 | 2e+14 |
+
+`separate` refuses above $\eta T = 700$, where the float overflows outright, but
+as the table shows it is already useless by 30. This is the same ceiling that
+makes the large-$\eta$ rows of `sep_test.py` blow up.
 
 ### Generalising to any number of gauges
 
-`K` gauges give `K` equations per frequency for 2 unknowns. Writing
-`a_k = exp(-i·xi·x_k)` and `b_k = exp(+i·xi·x_k)`, the system is `E = P·a + M·b`
-with `a, b` in C^K. Minimising the residual `sum_k |E_k - P·a_k - M·b_k|^2` gives
-the 2x2 normal equations
+Write $a_k = e^{-i\xi x_k}$ and $b_k = e^{+i\xi x_k}$ for the two phase factors
+at gauge $k$, so the model of the previous section reads
+$\varepsilon_k = P a_k + M b_k$.
 
-```
-[ <a,a>  <a,b> ] [P]   [ <a,E> ]
-[ <b,a>  <b,b> ] [M] = [ <b,E> ]
+#### Two gauges: an exact solve
+
+With exactly two gauges there are two equations and two unknowns, and no
+approximation is involved:
+
+```math
+\begin{bmatrix} a_1 & b_1 \\[2pt] a_2 & b_2 \end{bmatrix}
+\begin{bmatrix} P \\[2pt] M \end{bmatrix}
+=
+\begin{bmatrix} \varepsilon_1 \\[2pt] \varepsilon_2 \end{bmatrix},
+\qquad
+\mathbf{A}\mathbf{z} = \boldsymbol{\varepsilon}
 ```
 
-Every entry is a **sum over gauges**, and that is the whole generalisation. In
-`separate`:
+The determinant collapses to a single sine. With $D = x_2 - x_1$ the gauge
+spacing,
 
-```python
-h1 = sum(np.exp(-1j * (xi - xc) * d) for d in x)     # <a,a>
-h2 = sum(np.exp(+1j * (xi - xc) * d) for d in x)     # <b,b>
-g  = sum(np.exp(+1j * (xi + xc) * d) for d in x)     # <a,b>
-E1 = sum(Ek * np.exp(+1j * xc * d) for Ek, d in zip(E, x))
-E2 = sum(Ek * np.exp(-1j * xc * d) for Ek, d in zip(E, x))
+```math
+\det\mathbf{A} = a_1b_2 - b_1a_2
+       = e^{+i\xi D} - e^{-i\xi D}
+       = 2i\,\sin(\xi D)
 ```
+
+so Cramer's rule gives the separated waves outright:
+
+```math
+P = \frac{\varepsilon_1 e^{+i\xi x_2} - \varepsilon_2 e^{+i\xi x_1}}{2i\,\sin(\xi D)},
+\qquad
+M = \frac{\varepsilon_2 e^{-i\xi x_1} - \varepsilon_1 e^{-i\xi x_2}}{2i\,\sin(\xi D)}
+```
+
+**Everything about the method is already visible here.** The solution exists
+unless $\sin(\xi D) = 0$, and only the spacing $D$ appears — not where the pair
+sits on the bar. Splitting $\xi D$ into its real and imaginary parts,
+
+```math
+\bigl|\sin(\xi D)\bigr|^2
+  = \sin^2\!\left(\frac{\omega D}{c}\right) + \sinh^2\!\left(\frac{\eta D}{c}\right)
+```
+
+With $\eta = 0$ the second term vanishes and the first is zero whenever
+$\omega D/c = n\pi$, i.e. whenever the spacing is a whole number of
+half-wavelengths: the two gauges then see the same phase and cannot tell the
+waves apart. The $\sinh$ term — which exists only because $\eta > 0$ — is what
+keeps the denominator away from zero.
+
+#### More than two gauges: least squares
+
+With $K > 2$ gauges, $\mathbf{A}$ is $K \times 2$ and
+$\mathbf{A}\mathbf{z} = \boldsymbol{\varepsilon}$ is overdetermined: measurement
+noise and model error mean no $(P, M)$ satisfies all $K$ equations at once. Take
+the pair that comes closest in the least-squares sense,
+
+```math
+\min_{P,\,M}\; J(P,M), \qquad
+J = \bigl\|\boldsymbol{\varepsilon} - \mathbf{A}\mathbf{z}\bigr\|^2
+  = \sum_{k=1}^{K} \bigl| \varepsilon_k - P\,a_k - M\,b_k \bigr|^2
+```
+
+$J$ is real and quadratic, so its minimum is where the derivatives with respect
+to $\bar{P}$ and $\bar{M}$ both vanish:
+
+```math
+\frac{\partial J}{\partial \bar{P}}
+ = -\sum_k \bar{a}_k\bigl(\varepsilon_k - P a_k - M b_k\bigr) = 0,
+\qquad
+\frac{\partial J}{\partial \bar{M}}
+ = -\sum_k \bar{b}_k\bigl(\varepsilon_k - P a_k - M b_k\bigr) = 0
+```
+
+Rearranging each into unknowns-on-the-left form, and writing
+$\langle \mathbf{u},\mathbf{v}\rangle = \sum_k \bar{u}_k v_k$,
+
+```math
+P\,\langle \mathbf{a},\mathbf{a}\rangle + M\,\langle \mathbf{a},\mathbf{b}\rangle
+  = \langle \mathbf{a},\boldsymbol{\varepsilon}\rangle,
+\qquad
+P\,\langle \mathbf{b},\mathbf{a}\rangle + M\,\langle \mathbf{b},\mathbf{b}\rangle
+  = \langle \mathbf{b},\boldsymbol{\varepsilon}\rangle
+```
+
+which is $\mathbf{A}^{H}\mathbf{A}\,\mathbf{z} = \mathbf{A}^{H}\boldsymbol{\varepsilon}$ —
+**the $K$ equations have collapsed back into a $2 \times 2$ system:**
+
+```math
+\begin{bmatrix}
+\langle \mathbf{a},\mathbf{a}\rangle & \langle \mathbf{a},\mathbf{b}\rangle \\[2pt]
+\langle \mathbf{b},\mathbf{a}\rangle & \langle \mathbf{b},\mathbf{b}\rangle
+\end{bmatrix}
+\begin{bmatrix} P \\[2pt] M \end{bmatrix}
+=
+\begin{bmatrix}
+\langle \mathbf{a},\boldsymbol{\varepsilon}\rangle \\[2pt]
+\langle \mathbf{b},\boldsymbol{\varepsilon}\rangle
+\end{bmatrix}
+```
+
+Every entry is a **sum over gauges**, and that is the whole generalisation:
+
+| Entry | Value | In `separate` |
+|---|---|---|
+| $\langle \mathbf{a},\mathbf{a}\rangle$ | $\sum_k e^{-i(\xi - \bar\xi)x_k}$ | `h1` |
+| $\langle \mathbf{b},\mathbf{b}\rangle$ | $\sum_k e^{+i(\xi - \bar\xi)x_k}$ | `h2` |
+| $\langle \mathbf{a},\mathbf{b}\rangle$ | $\sum_k e^{+i(\xi + \bar\xi)x_k}$ | `g` |
+| $\langle \mathbf{a},\boldsymbol{\varepsilon}\rangle$ | $\sum_k \varepsilon_k\,e^{+i\bar\xi x_k}$ | `E1` |
+| $\langle \mathbf{b},\boldsymbol{\varepsilon}\rangle$ | $\sum_k \varepsilon_k\,e^{-i\bar\xi x_k}$ | `E2` |
 
 The gauge count is never a dimension — it is only the number of terms in five
-sums. The system solved is always 2x2, whether there are 2 gauges or 20. Because
-`xi - conj(xi) = -2i·eta/c_p` and `xi + conj(xi) = 2w/c_p`, these reduce to
+sums. The system solved is always $2 \times 2$, whether there are 2 gauges or 20.
+Because $\xi - \bar\xi = -2i\eta/c_p$ and $\xi + \bar\xi = 2\omega/c_p$, these
+reduce to
 
+```math
+h_1 = \sum_k e^{-2\eta x_k/c} \;>\; 0,
+\qquad
+h_2 = \sum_k e^{+2\eta x_k/c} \;>\; 0,
+\qquad
+g   = \sum_k e^{+2i\omega x_k/c}
 ```
-h1 = sum_k exp(-2·eta·x_k/c)     real, > 0
-h2 = sum_k exp(+2·eta·x_k/c)     real, > 0
-g  = sum_k exp(+2i·w·x_k/c)      pure phases
+
+so $h_1$ and $h_2$ are real and positive while $g$ is a sum of pure phases, and
+Cramer's rule finishes it with
+
+```math
+\det \;=\; h_1 h_2 - |g|^2
 ```
 
-and Cramer's rule finishes it, with `det = h1·h2 - |g|^2`.
+#### The two routes are the same route
 
-**Two gauges is not a special case.** The system is then square, so the
-least-squares solution *is* the exact solution — the residual is zero and the
-normal equations reproduce `A^-1·E`. For more than two gauges the same code
-becomes a genuine fit that averages the redundancy. This is why a 2+2 layout
-needs no separate code path.
+For $K = 2$ the least-squares machinery does **not** give a different answer from
+the exact solve above. $\mathbf{A}$ is then square and invertible, so
+
+```math
+\mathbf{z} = \bigl(\mathbf{A}^{H}\mathbf{A}\bigr)^{-1}\mathbf{A}^{H}\boldsymbol{\varepsilon}
+           = \mathbf{A}^{-1}\bigl(\mathbf{A}^{H}\bigr)^{-1}\mathbf{A}^{H}\boldsymbol{\varepsilon}
+           = \mathbf{A}^{-1}\boldsymbol{\varepsilon}
+```
+
+The residual $J$ is zero and the fit is an interpolation. Numerically, the
+explicit Cramer expressions above and `separate` agree to $6 \times 10^{-14}$
+relative on the shipped 2-gauge dump.
+
+The determinants match too, which is worth noting because the next subsection
+leans on it: for a square $\mathbf{A}$,
+$\det(\mathbf{A}^{H}\mathbf{A}) = |\det\mathbf{A}|^2$, so
+
+```math
+h_1 h_2 - |g|^2 \;=\; \bigl|2i\sin(\xi D)\bigr|^2 \;=\; 4\bigl|\sin(\xi D)\bigr|^2
+```
+
+**So there is one code path, not two.** With two gauges it interpolates exactly;
+with more it becomes a genuine fit that averages the redundancy; and the only
+thing that changes between them is how many terms are in the five sums. This is
+why a 2+2 layout needs no special-casing, and why `separate` accepts any
+$K \ge 2$ without a branch.
 
 ### What the determinant tells you
 
-`det` is the Gram determinant of `a` and `b`, so it vanishes exactly when the two
-are parallel — when the gauge array cannot tell an outgoing wave from an incoming
-one. For **two** gauges with spacing `D` it has a closed form:
+$\det$ is the Gram determinant of $\mathbf{a}$ and $\mathbf{b}$, so it vanishes
+exactly when the two are parallel — when the gauge array cannot tell an outgoing
+wave from an incoming one. For **two** gauges with spacing $D$ it follows from
+$4|\sin(\xi D)|^2$ above, via the same real/imaginary split and a double-angle
+identity:
 
-```
-det = 2·[ cosh(2·eta·D/c) - cos(2·w·D/c) ]
+```math
+\det \;=\; 2\left[\, \cosh\!\left(\frac{2\eta D}{c}\right)
+                   - \cos\!\left(\frac{2\omega D}{c}\right) \right]
 ```
 
 Both failure modes are visible in it:
 
-- the **cosine** term dips whenever `2·w·D/c = 2·pi·n`, i.e. every `c/(2D)` in
+- the **cosine** term dips whenever $2\omega D/c = 2\pi n$, i.e. every $c/2D$ in
   frequency — the spacing is a whole number of half-wavelengths and the phase
-  factors come back into step. For the shipped `D = 400 mm` that is every
+  factors come back into step. For the shipped $D = 400\ \text{mm}$ that is every
   **6.31 kHz**;
-- the **cosh** term is what stops those dips reaching zero. At `eta = 1.0 /ms`
-  the floor is `2[cosh(2·eta·D/c) - 1] = 2.5e-02` against a typical value of 2.0,
-  so roughly 1 %: noise there is amplified about 80x, but nothing is divided by
-  zero. At `eta = 0` the cosh term is exactly 1, the dips touch zero, and the
-  system is singular at DC as well.
+- the **cosh** term is what stops those dips reaching zero. At $\eta = 1.0$ /ms
+  the floor is $2[\cosh(2\eta D/c) - 1] = 2.5 \times 10^{-2}$ against a typical
+  value of $2.0$, so roughly 1 %: noise there is amplified about 80x, but nothing
+  is divided by zero. At $\eta = 0$ the cosh term is exactly 1, the dips touch
+  zero, and the system is singular at DC as well.
 
 That is why `eta` is mandatory, and why `conditioning()` exists — use it to audit
 a layout before committing to it. See [Choosing eta](#choosing-eta) for how to
@@ -197,37 +391,52 @@ The two bars are solved **completely independently**; they share nothing until
 the very last step. For a 2+2 layout the chain runs:
 
 1. **Per bar** (`separate`): two gauge signals → windowed FFT → for each
-   frequency bin, solve that 2x2 system → `P(w), M(w)` → inverse FFT → undo the
-   window with `exp(+eta·t)` → `eps_plus(t)` and `eps_minus(t)`, both now at
-   `x = 0`.
+   frequency bin, solve that $2 \times 2$ system → $P(\omega), M(\omega)$ →
+   inverse FFT → undo the window with $e^{+\eta t}$ → $\varepsilon_+(t)$ and
+   $\varepsilon_-(t)$, both now at $x = 0$.
 
 2. **Interface state** (`bar_interface`):
 
-   ```python
-   force   = E * A * (eps_plus + eps_minus)
-   v_local = c0 * (eps_minus - eps_plus)
+   ```math
+   F = EA\,(\varepsilon_+ + \varepsilon_-),
+   \qquad
+   v_\text{local} = c_0\,(\varepsilon_- - \varepsilon_+)
    ```
 
    Force *adds* the two waves because strain superposes. Velocity *subtracts*
-   them because a wave travelling toward +x with strain `e` carries particle
-   velocity `-c0·e`, while one travelling toward -x carries `+c0·e`. Then
-   `v_global = outward·v_local + v0`, with `outward = -1` for the input bar and
-   `+1` for the output bar, and `v0` added back because a uniformly translating
-   bar carries no strain and so is invisible to every gauge.
+   them because a wave travelling toward $+x$ with strain $\varepsilon$ carries
+   particle velocity $-c_0\varepsilon$, while one travelling toward $-x$ carries
+   $+c_0\varepsilon$. Then
 
-3. **Specimen** (`specimen_response`): stress from each face is
-   `F/A_specimen`, and the reported stress is their mean; strain comes from
-   integrating the closing velocity `v_in - v_out` and dividing by `L0`. The
-   printed `|F1-F2|/max|F1|` is the consistency check on that averaging.
+   ```math
+   v_\text{global} = s\,v_\text{local} + v_0,
+   \qquad s = -1 \;\text{(input bar)}, \quad s = +1 \;\text{(output bar)}
+   ```
+
+   with $v_0$ added back because a uniformly translating bar carries no strain
+   and so is invisible to every gauge.
+
+3. **Specimen** (`specimen_response`): stress is the mean of the two faces, and
+   strain comes from integrating the closing velocity:
+
+   ```math
+   \sigma = \frac{F_1 + F_2}{2A_s},
+   \qquad
+   \varepsilon(t) = \frac{1}{L_0}\int_0^{t} \bigl(v_\text{in} - v_\text{out}\bigr)\,dt'
+   ```
+
+   The printed $|F_1 - F_2| / \max|F_1|$ is the consistency check on that
+   averaging.
 
 ### A consequence worth knowing
 
-Because the bars are separate 2x2 problems that meet only in that final
+Because the bars are separate $2 \times 2$ problems that meet only in that final
 averaging, **instrumentation cannot be traded between them**. A single gauge on
-the input bar leaves `P_in` and `M_in` under-determined and `F_in` badly wrong,
-and no number of output-bar gauges appears anywhere in the input bar's normal
-equations. Measured on the SHTB case, 1+2 and 1+3 agree to three digits — both
-useless — while 2+2 is excellent. Spend gauges on the input bar first.
+the input bar leaves $P_\text{in}$ and $M_\text{in}$ under-determined and
+$F_\text{in}$ badly wrong, and no number of output-bar gauges appears anywhere in
+the input bar's normal equations. Measured on the SHTB case, 1+2 and 1+3 agree to
+three digits — both useless — while 2+2 is excellent. Spend gauges on the input
+bar first.
 
 ## The two implementations, and why both are kept
 
