@@ -319,6 +319,121 @@ the stress looks perfect while the strain is garbage. **Tune eta on the strain,
 never the stress.** The module docstring in `wave_separation.py` has the full
 reasoning.
 
+That table was measured on the direct-impact case. On the current SHTB
+configuration the picture is blunter: eta is **completely flat from 0.5 to 8.0
+/ms** — every error identical to four digits — and only degrades below 0.5. Once
+you are above the floor, eta is not a tuning knob at all, and nothing is gained
+by hunting for an optimum. Re-measure it for your own record rather than
+assuming either table applies.
+
+## Accuracy and time integration
+
+Both simulators use explicit leapfrog on a lumped mass-spring chain. That is a
+deliberate choice, not an unexamined default, and the error budget below is why.
+The short version: **the time integration is not what limits accuracy here, and
+neither an implicit scheme nor a spectral method would help.**
+
+### The scheme is exactly non-dispersive at courant = 1
+
+For this discretisation the leapfrog dispersion relation is
+
+```
+sin(w~ dt/2) = C · sin(k · dx/2),        C = c·dt/dx
+```
+
+At `C = 1` the sine inverts exactly, every wavenumber travels at exactly `c`, and
+the numerical phase error is **zero at all wavelengths** — the "magic timestep".
+Below it, the error is small and grows with frequency:
+
+| f [kHz] | lambda [mm] | C = 0.5 | C = 0.8 | C = 1.0 |
+|---|---|---|---|---|
+| 10 | 505 | -4.8e-06 | -1.7e-06 | 0 |
+| 100 | 51 | -4.8e-04 | -1.7e-04 | 0 |
+| 200 | 25 | -1.9e-03 | -7.0e-04 | 0 |
+
+(`c_num/c - 1`, for `dx = 1 mm`.) At `C = 0.5` and 100 kHz that is 0.29 µs of
+timing drift over the full 3020 mm bar — 0.03 % of the 1097 µs pulse.
+
+The consequence is the opposite of the usual intuition: **a larger timestep is
+both faster and more accurate here.** Raising `courant` reduces phase error
+rather than adding any.
+
+### Where the error actually is
+
+Measured on the SHTB case, varying one thing at a time:
+
+| Variant | stress rel L2 | strain rel L2 |
+|---|---|---|
+| `C=0.8, damp=0.01, dx=1.0` (shipped) | 1.87e-03 | 2.27e-03 |
+| `C=0.5` | 2.45e-03 | 2.29e-03 |
+| half viscosity, `damp=0.005` | 5.50e-03 | 2.39e-03 |
+| double viscosity, `damp=0.02` | 1.92e-03 | 2.46e-03 |
+| 2x mesh, `dx=0.5` (2x cost) | 2.00e-03 | 2.11e-03 |
+| **exact interface forces, no separation at all** | **1.82e-03** | — |
+
+Two rows decide the question:
+
+- **The last one is a ceiling test.** Hand the specimen estimator the
+  simulator's own exact interface forces — skipping the wave separation
+  entirely — and the stress error is still 1.82e-03, because the specimen is
+  genuinely not in force equilibrium (face-force disagreement 2.75e-03). Most of
+  the residual is there before any numerics.
+- **Strain sits near 2.2e-03 regardless.** No integrator, viscosity or mesh
+  setting moves it much, and eta does not move it at all. It is set by the 1D
+  reduction — engineering strain from the face-velocity difference, against a
+  specimen that is itself a wave-bearing body.
+
+Note also that **artificial viscosity matters more than the integrator**:
+halving it more than doubles the stress error. It is suppressing grid ringing at
+the wavefronts, not merely cosmetic.
+
+### Why courant = 0.8
+
+| C | steps | stress | strain | F_in |
+|---|---|---|---|---|
+| 0.50 | 36861 | 2.45e-03 | 2.29e-03 | 5.25e-03 |
+| **0.80** | **23038** | **1.87e-03** | **2.27e-03** | **4.39e-03** |
+| 0.90 | 20478 | 1.68e-03 | 2.46e-03 | 4.18e-03 |
+| 0.95 | 19400 | 1.63e-03 | 2.54e-03 | 4.14e-03 |
+| 1.00 | — | NaN | | |
+
+The magic timestep is unreachable in the tension model: the contact spring adds a
+second force path at the anvil node and `C = 1.0` diverges, though it stays
+stable to ~0.95. `0.8` takes 24 % off the stress error, leaves strain unchanged,
+runs **1.6x fewer steps**, and keeps a 20 % stability margin. That margin is
+robust — still stable at 0.9 with a steel striker, whose contact is 70x stiffer,
+because `k_contact` derives from the striker's own modulus and `dt` already
+tracks the fastest material present.
+
+Curiously, the compression case is *worse* at the exact `C = 1.0, damp = 0`
+setting (5.16e-02 against 4.23e-02 at `C = 0.5`). Exact integration then leaves
+the discontinuous initial velocity as an undamped one-sample impulse at every
+wavefront, and the reduction handles that ringing badly. Exact in time is not the
+same as accurate overall.
+
+### Why not implicit, why not spectral
+
+**Implicit** (Newmark, generalised-α) buys unconditional stability, whose only
+value is taking `dt` far above the CFL limit. For wave propagation that smears
+exactly the wavefronts being measured — implicit schemes carry period elongation
+and, with numerical damping, amplitude decay. It would also need a Newton solve
+every step, because both the contact and the specimen plasticity are non-smooth.
+Strictly worse, for real added complexity.
+
+**Spectral** methods are a poor fit for this geometry. The model has material
+discontinuities (steel anvil | aluminium bar | soft specimen), a unilateral
+contact, a yield surface, and free ends. Fourier methods need periodicity and
+smoothness and would ring at every one of those; Chebyshev handles the
+non-periodicity but degrades the timestep limit to O(1/N²) and still breaks on
+the discontinuities. A spectral *element* method with element boundaries placed
+on the material interfaces would be the principled high-order choice — it is what
+seismology uses, and it keeps an explicit leapfrog and a diagonal mass matrix —
+but it is a full rewrite whose payoff is capped by the 1.8e-03 floor above.
+
+**If more accuracy is ever needed, refine the mesh** — that is the lever with a
+measurable effect (`dx = 0.5` gives 2.00e-03 at twice the cost) — or change the
+specimen reduction, which is what the floor is actually made of.
+
 ## Files
 
 | File | Purpose |
@@ -356,12 +471,17 @@ library from Python 3.11.
 the gauge signals alone, through 38 % strain including the wave-overlap regime:
 
 ```
-peak specimen strain (true)      : 0.3843
-peak strain rate (reconstructed) : 975 /s
-stress   rel L2 err vs truth     : 1.7e-02
-strain   rel L2 err vs truth     : 1.6e-03
-force equilibrium |F1-F2|/max|F1|: mean 3.1e-02
+peak specimen strain (true)      : 0.3851
+peak strain rate (reconstructed) : 957 /s
+stress   rel L2 err vs truth     : 3.7e-02
+strain   rel L2 err vs truth     : 3.0e-03
+force equilibrium |F1-F2|/max|F1|: mean 2.9e-02
 ```
+
+That is the shipped 2-gauges-per-bar layout. The compression case is the one
+that *loses* by dropping to two gauges — with three it gives 1.7e-02 stress and
+1.6e-03 strain. The tension case gains; see below. If you work mainly in
+compression, put `gauges = [130.0, 530.0, 1177.0]` back in `[compression]`.
 
 ## The tension simulator (SHTB)
 
@@ -401,15 +521,20 @@ Differences from the compression model that affect the reduction:
   ringing that never decays without it. `courant = 1.0` is unstable (NaN)
   because the contact spring adds a second force path at the anvil node.
 
-Validated end to end, 3 gauges per bar, eta = 1.0 /ms:
+Validated end to end, 2 gauges per bar, eta = 1.0 /ms, courant = 0.8:
 
 ```
-peak specimen strain (true)      : 0.8008
-peak strain rate (reconstructed) : 683 /s
-stress   rel L2 err vs truth     : 3.8e-03
-strain   rel L2 err vs truth     : 2.2e-03
-force equilibrium |F1-F2|/max|F1|: mean 4.0e-03
+peak specimen strain (true)      : 0.8009
+peak strain rate (reconstructed) : 684 /s
+stress   rel L2 err vs truth     : 1.9e-03
+strain   rel L2 err vs truth     : 2.3e-03
+force equilibrium |F1-F2|/max|F1|: mean 3.5e-03
 ```
+
+The stress figure is within 3 % of the 1.82e-03 ceiling that the specimen
+estimator gives even when handed *exact* interface forces — see
+[Accuracy and time integration](#accuracy-and-time-integration). There is very
+little left in this number that better wave separation could recover.
 
 This is far better than the impedance-matched aluminium striker on 2000 mm bars
 that preceded it (stress 6.7e-2, equilibrium 8.3e-2), and the long pulse is why:

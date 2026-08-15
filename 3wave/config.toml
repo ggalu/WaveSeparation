@@ -17,8 +17,19 @@
 # own [<case>.numerics] table.
 # --------------------------------------------------------------------------
 [numerics]
-courant = 0.5           # dt = courant * dx / c_max ; 1.0 is the stability limit
-damping = 0.01          # artificial viscosity coefficient
+# dt = courant * dx / c_max, with c_max over all materials present.
+#
+# A LARGER courant is both faster and more accurate here, which is worth knowing
+# before anyone "improves" it downwards. The lumped chain is exactly
+# non-dispersive at courant = 1.0, so raising it reduces phase error rather than
+# adding any. The ceiling is not 1.0 in general: the tension model's contact
+# spring adds a second force path at the anvil node and diverges to NaN there,
+# while staying stable to ~0.95. 0.8 keeps a 20 % margin, costs 1.6x fewer steps
+# than 0.5, and measures 24 % better on stress.
+# See "Accuracy and time integration" in README.md for the full error budget.
+courant = 0.8
+damping = 0.01          # artificial viscosity coefficient; matters MORE than the
+                        # integrator -- halving it doubles the stress error
 ncyc = 3                # wave round-trips simulated; 3 keeps FFT truncation
                         # out of the analysis window (2 is visibly worse)
 dx = 1.0                # element length [mm]
