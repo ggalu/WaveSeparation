@@ -4,7 +4,7 @@ connected-bar calibration shot -- no specimen, both bars bolted together.
 
     python3 drive_calibration_tension.py
     python3 identify_bar_tension.py [--headless]
-    python3 identify_bar_tension.py --xi-ref 3679.5 --xi-ref-tol 2.0
+    python3 identify_bar_tension.py --l-free-ref 3679.5 --l-free-ref-tol 2.0
 
 Runs on the rig's OWN striker. The 800 mm POM tube gives a 1097 us pulse against
 a 2435 us assembly round trip, so echoes overlap the direct pulse and whole-pulse
@@ -25,29 +25,38 @@ one overall scale, and exactly ONE measured length has to be supplied.
 
 This script asks for the least painful one: the distance from a single gauge --
 by preference the one the wave reaches first, which is the one furthest from the
-free end -- to the far free end. Call it xi_ref. It comes from
+free end -- to the far free end. Call it L_free_ref. It comes from
 
-    xi_ref, xi_ref_gauge, xi_ref_tol   in [calibration_tension] of config.toml
-    --xi-ref / --xi-ref-tol            overriding those, to sweep sensitivity
+    L_free_ref, L_free_ref_gauge, L_free_ref_tol
+                                 in [calibration_tension] of config.toml
+    --l-free-ref / --l-free-ref-tol
+                                 overriding those, to sweep sensitivity
 
 and if none of them is set the script falls back to the MODEL's geometry, which
 a simulation can supply and a rig cannot. That fallback is the self-check mode;
-supplying xi_ref is what makes this an instrument. Any gauge may carry the tape
--- xi_k = xi_ref (1 - 2 lag_k / Q) inverts to refer it back to the reference
-gauge -- but a short baseline divides the tolerance up by the same factor, so
-measure the longest one you can reach.
+supplying L_free_ref is what makes this an instrument. Any gauge may carry the
+tape -- L_free_k = L_free_ref (1 - 2 lag_k / Q) inverts to refer it back to the
+reference gauge -- but a short baseline divides the tolerance up by the same
+factor, so measure the longest one you can reach.
+
+L_free is a DISTANCE, in mm, measured from the free surface: the same family as
+the dump's L_free_in / L_free_out, which are that distance for a bar face rather
+than for a gauge. It is NOT the complex wavenumber xi = (w - i eta)/c_p of the
+separation theory, which is a different quantity with different units and lives
+in wave_separation.py. The two used to share the name xi here, which is why the
+next paragraph but one spells the distinction out.
 
 Everything else is then leverage:
 
-    d(c0)/c0 = d(D)/D = d(xi_ref)/xi_ref
+    d(c0)/c0 = d(D)/D = d(L_free_ref)/L_free_ref
 
 so a tape measurement good to +-2 mm over the ~3.7 m reference baseline lands D
-to +-0.22 mm on a 400 mm spacing. THE POINT IS THE RATIO xi_ref/D: a sloppy
+to +-0.22 mm on a 400 mm spacing. THE POINT IS THE RATIO L_free_ref/D: a sloppy
 measurement on a long baseline buys a sharp one on a short baseline, which is
 exactly the trade you want, because the short baseline is the one you cannot
 measure and the long one is the one you can.
 
-That leverage does NOT extend to the gauge positions x. Those are xi plus a
+That leverage does NOT extend to the gauge positions x. Those are L_free plus a
 constant the tape error never touches, so they inherit an ABSOLUTE band of order
 the tape error itself -- +-1.3 to +-2.0 mm here, reported per gauge in the
 +-tape column. It is benign, because a common offset mostly moves where the wave
@@ -59,11 +68,16 @@ No assumption is made that the two bars are instrumented symmetrically. The
 script MEASURES the asymmetry of each nominal pair instead, and reports it.
 
 That trade is better still because of what the reduction actually consumes. In
-`separate` the positions enter only as
+`separate` a position x_k reaches the answer only through the phase of
 
     xi * x_k = (w - i eta) * x_k / c0
 
-so the result depends on the TRANSIT TIMES x_k/c0 and on nothing else --
+where xi is the COMPLEX WAVENUMBER of the separation -- 1/length, the (w - i
+eta)/c_p of wave_separation.py -- and not any length identified here. That is
+the one place the symbol is used in this sense, and it is why the distances
+recovered below are called L_free rather than xi.
+
+So the result depends on the TRANSIT TIMES x_k/c0 and on nothing else --
 verified: scaling positions and c0 together by any factor changes the separated
 waves by 4e-14 relative. c0 alone is still needed, but only in `bar_interface`,
 where it converts strain to particle velocity LINEARLY.
@@ -79,18 +93,19 @@ static load or from striker momentum, and treat rho as a by-product.
 How the record is read
 --------------------------------------------------------------------------
 With the bars joined and no specimen the assembly is one uniform bar with a
-reflector at each end. A gauge xi from the free end and a from the anvil end
+reflector at each end. A gauge L_free from the free end and a from the anvil end
 sees, in the DERIVATIVE of its record,
 
-    delay 0          + edge   the pulse arriving
-    delay P          - edge   its own trailing edge (P = striker pulse length)
-    delay 2 xi / c0  - edge   the free-end echo arriving, INVERTED
-    delay 2 xi/c0+P  + edge   that echo's trailing edge
+    delay 0                + edge   the pulse arriving
+    delay P                - edge   its own trailing edge (P = striker pulse)
+    delay 2 L_free / c0    - edge   the free-end echo arriving, INVERTED
+    delay 2 L_free/c0 + P  + edge   that echo's trailing edge
 
-P is the same at every gauge and 2 xi / c0 is not, which is how the two negative
-edges are told apart with nothing assumed about the striker. Where they happen
-to land within one edge width of each other the gauge is simply dropped from the
-c0 average -- its position still comes through, from the gauge-to-gauge lag.
+P is the same at every gauge and 2 L_free / c0 is not, which is how the two
+negative edges are told apart with nothing assumed about the striker. Where they
+happen to land within one edge width of each other the gauge is simply dropped
+from the c0 average -- its position still comes through, from the gauge-to-gauge
+lag.
 
 Only the FREE end is ever used. The anvil end is not a clean reflector: the
 anvil is a lumped mass rather than a termination, and it reflects like a free
@@ -110,12 +125,15 @@ import plotting
 # before pyplot is imported, so both happen here at the top -- see plotting.py.
 _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-_ap.add_argument('--xi-ref', type=float, metavar='MM',
+# dest is spelled out because argparse would otherwise lower-case the L, and
+# the capital is what marks this as a length rather than the separation's xi.
+_ap.add_argument('--l-free-ref', type=float, metavar='MM', dest='L_free_ref',
                  help='reference length, gauge -> far free end [mm]. Overrides '
-                      'xi_ref in config.toml. This is THE measured length the '
-                      'shot cannot supply itself.')
-_ap.add_argument('--xi-ref-tol', type=float, metavar='MM',
-                 help='what the tape is good to [mm]. Overrides xi_ref_tol. '
+                      'L_free_ref in config.toml. This is THE measured length '
+                      'the shot cannot supply itself.')
+_ap.add_argument('--l-free-ref-tol', type=float, metavar='MM',
+                 dest='L_free_ref_tol',
+                 help='what the tape is good to [mm]. Overrides L_free_ref_tol. '
                       'Propagated to every result below.')
 HEADLESS, ARGS = plotting.init(parser=_ap)   # picks the backend; precedes pyplot
 
@@ -149,10 +167,11 @@ AREA = 0.25 * np.pi * DIAMETER ** 2
 # durable home; the flags exist so its influence can be swept without editing
 # the file. Absent from both, the script falls back to the model's own geometry
 # further down, which makes it a self-check rather than an instrument.
-XI_REF_CFG = ARGS.xi_ref if ARGS.xi_ref is not None else cfg.get('xi_ref')
-XI_REF_GAUGE = cfg.get('xi_ref_gauge')       # None = "whichever is reference"
-XI_REF_TOLERANCE = (ARGS.xi_ref_tol if ARGS.xi_ref_tol is not None
-                    else cfg.get('xi_ref_tol', 2.0))    # [mm]
+L_FREE_REF_CFG = (ARGS.L_free_ref if ARGS.L_free_ref is not None
+                  else cfg.get('L_free_ref'))
+L_FREE_REF_GAUGE = cfg.get('L_free_ref_gauge')   # None = "whichever is ref"
+L_FREE_REF_TOL = (ARGS.L_free_ref_tol if ARGS.L_free_ref_tol is not None
+                  else cfg.get('L_free_ref_tol', 2.0))    # [mm]
 
 
 # --------------------------------------------------------------------------
@@ -229,7 +248,7 @@ for g in grads:
 arrival = np.array(arrival)
 
 REF = int(np.argmin(arrival))     # earliest arrival = furthest from the free end
-lag = arrival - arrival[REF]      # >= 0, = (xi_ref - xi_k) / c0
+lag = arrival - arrival[REF]      # >= 0, = (L_free_ref - L_free_k) / c0
 
 print(f'\nreference gauge   : {names[REF]} (earliest arrival -> longest '
       f'baseline to the free end)')
@@ -281,7 +300,7 @@ print(f'striker pulse P   : {P*1e3:.1f} us (the delay shared by {best} of '
 print('\n--- edges, per gauge '
       '------------------------------------------------------')
 print(f'{"gauge":>7} {"peak":>10} {"arrival":>9} {"lag vs ref":>11} '
-      f'{"2xi/c0":>10}')
+      f'{"2L_free/c0":>10}')
 print(f'{"":>7} {"[ustrain]":>10} {"[ms]":>9} {"[us]":>11} {"[ms]":>10}')
 for k, nm in enumerate(names):
     tk = '  merged' if np.isnan(tau[k]) else f'{tau[k]:10.5f}'
@@ -291,8 +310,8 @@ for k, nm in enumerate(names):
 # --------------------------------------------------------------------------
 # c0 from the ONE measured length
 # --------------------------------------------------------------------------
-# xi_k = xi_ref - c0 * lag_k, and tau_k = 2 xi_k / c0, so
-#     Q_k = tau_k + 2 lag_k = 2 xi_ref / c0
+# L_free_k = L_free_ref - c0 * lag_k, and tau_k = 2 L_free_k / c0, so
+#     Q_k = tau_k + 2 lag_k = 2 L_free_ref / c0
 # is the same for every gauge. Gauges whose two negative edges merged drop out;
 # the rest are averaged, and their spread is a genuine consistency check.
 # Q must be the same at every gauge, so a gauge whose two negative edges merged
@@ -300,7 +319,7 @@ for k, nm in enumerate(names):
 # outlier and is thrown out. With three or more gauges this needs no threshold
 # tuning: the good ones agree to a fraction of a microsecond.
 #
-# Q is resolved BEFORE xi_ref because referring a tape reading taken at some
+# Q is resolved BEFORE L_free_ref because referring a tape reading taken at some
 # other gauge back to the reference gauge needs it.
 Q = tau + 2.0 * lag
 ok = ~np.isnan(Q)
@@ -309,92 +328,98 @@ if ok.sum() < 1:
     raise SystemExit('no gauge gave a usable free-end echo')
 Q_MEAN = float(np.mean(Q[ok]))
 
-# XI_REF is THE tape measurement -- the one length the experiment cannot supply
-# itself. On the rig you measure it once, from a gauge to the far free end, to
-# whatever precision you can manage, and put it in config.toml (or pass
-# --xi-ref). The model's own geometry is the FALLBACK: a simulation can supply
-# it and a rig cannot, so relying on it makes this a self-check rather than an
-# instrument. Nothing else below consults the true geometry except the error
-# columns.
+# L_FREE_REF is THE tape measurement -- the one length the experiment cannot
+# supply itself. On the rig you measure it once, from a gauge to the far free
+# end, to whatever precision you can manage, and put it in config.toml (or pass
+# --l-free-ref). The model's own geometry is the FALLBACK: a simulation can
+# supply it and a rig cannot, so relying on it makes this a self-check rather
+# than an instrument. Nothing else below consults the true geometry except the
+# error columns.
 X_TOTAL = d['X_OUT'] + d['L_free_out']
 _x_ref = (d['X_IN'] - d['pos_in'][REF]) if REF < n_in else \
          (d['X_OUT'] + d['pos_out'][REF - n_in])
-XI_REF_TRUE = X_TOTAL - _x_ref
+L_FREE_REF_TRUE = X_TOTAL - _x_ref
 
-if XI_REF_CFG is None:
-    XI_REF = XI_REF_TRUE
-    XI_REF_SRC = 'model geometry -- no xi_ref configured, so this is a SELF-CHECK'
-elif XI_REF_GAUGE in (None, names[REF]):
-    XI_REF = XI_REF_CFG
-    XI_REF_SRC = f'tape to {names[REF]}'
-elif XI_REF_GAUGE in names:
+if L_FREE_REF_CFG is None:
+    L_FREE_REF = L_FREE_REF_TRUE
+    L_FREE_REF_SRC = ('model geometry -- no L_free_ref configured, '
+                      'so this is a SELF-CHECK')
+elif L_FREE_REF_GAUGE in (None, names[REF]):
+    L_FREE_REF = L_FREE_REF_CFG
+    L_FREE_REF_SRC = f'tape to {names[REF]}'
+elif L_FREE_REF_GAUGE in names:
     # The tape may have reached any gauge, not the one the record happens to
-    # pick as reference. xi_k = xi_ref (1 - 2 lag_k / Q) inverts to give xi_ref
-    # from whichever gauge was actually measured -- at the cost of dividing the
-    # tolerance by that same factor, so a short baseline is a worse buy.
-    _k = names.index(XI_REF_GAUGE)
+    # pick as reference. L_free_k = L_free_ref (1 - 2 lag_k / Q) inverts to
+    # give L_free_ref from whichever gauge was actually measured -- at the cost
+    # of dividing the tolerance by that same factor, so a short baseline is a
+    # worse buy.
+    _k = names.index(L_FREE_REF_GAUGE)
     _scale = 1.0 - 2.0 * lag[_k] / Q_MEAN
     if _scale <= 0:
-        raise SystemExit(f'xi_ref_gauge {XI_REF_GAUGE!r} gives a non-positive '
-                         'baseline; check the record')
-    XI_REF = XI_REF_CFG / _scale
-    XI_REF_TOLERANCE = XI_REF_TOLERANCE / _scale
-    XI_REF_SRC = (f'tape to {XI_REF_GAUGE} ({XI_REF_CFG:.1f} mm), referred to '
-                  f'{names[REF]} by /{_scale:.5f}')
+        raise SystemExit(f'L_free_ref_gauge {L_FREE_REF_GAUGE!r} gives a '
+                         'non-positive baseline; check the record')
+    L_FREE_REF = L_FREE_REF_CFG / _scale
+    L_FREE_REF_TOL = L_FREE_REF_TOL / _scale
+    L_FREE_REF_SRC = (f'tape to {L_FREE_REF_GAUGE} ({L_FREE_REF_CFG:.1f} mm), '
+                      f'referred to {names[REF]} by /{_scale:.5f}')
 else:
-    raise SystemExit(f'xi_ref_gauge {XI_REF_GAUGE!r} is not one of {names}')
+    raise SystemExit(
+        f'L_free_ref_gauge {L_FREE_REF_GAUGE!r} is not one of {names}')
 
 # The configured value depends on the gauge layout and the bar lengths, so it
 # goes stale the moment either changes. In a simulation the true answer is right
 # there; say so rather than quietly identifying the wrong bar.
-if XI_REF_CFG is not None and abs(XI_REF - XI_REF_TRUE) > XI_REF_TOLERANCE:
-    print(f'\n!! WARNING: xi_ref resolves to {XI_REF:.1f} mm but the model '
-          f'geometry says {XI_REF_TRUE:.1f} mm,\n!! a slip of '
-          f'{XI_REF - XI_REF_TRUE:+.1f} mm, outside the +-'
-          f'{XI_REF_TOLERANCE:.1f} mm tolerance. Has the gauge layout or a\n'
-          f'!! bar length changed since xi_ref was measured?')
+if (L_FREE_REF_CFG is not None
+        and abs(L_FREE_REF - L_FREE_REF_TRUE) > L_FREE_REF_TOL):
+    print(f'\n!! WARNING: L_free_ref resolves to {L_FREE_REF:.1f} mm but the '
+          f'model\n!! geometry says {L_FREE_REF_TRUE:.1f} mm, a slip of '
+          f'{L_FREE_REF - L_FREE_REF_TRUE:+.1f} mm, outside the +-'
+          f'{L_FREE_REF_TOL:.1f} mm tolerance. Has the gauge layout or a\n'
+          f'!! bar length changed since L_free_ref was measured?')
 
-c0_id = 2.0 * XI_REF / Q_MEAN
+c0_id = 2.0 * L_FREE_REF / Q_MEAN
 
 print('\n--- wave speed '
       '------------------------------------------------------------')
-print(f'reference length xi_ref ({names[REF]} -> free end) : {XI_REF:.1f} '
-      f'+- {XI_REF_TOLERANCE:.1f} mm')
-print(f'  source          : {XI_REF_SRC}')
-print(f'{"gauge":>7} {"Q = 2xi_ref/c0 [ms]":>22}')
+print(f'L_free_ref ({names[REF]} -> free end) : {L_FREE_REF:.1f} '
+      f'+- {L_FREE_REF_TOL:.1f} mm')
+print(f'  source          : {L_FREE_REF_SRC}')
+print(f'{"gauge":>7} {"Q = 2 L_free_ref/c0 [ms]":>24}')
 for k, nm in enumerate(names):
-    note = f'{Q[k]:22.5f}' if ok[k] else (
-        f'{"dropped: edges merged":>22}' if np.isnan(Q[k]) else
-        f'{Q[k]:16.5f} rejected')
+    note = f'{Q[k]:24.5f}' if ok[k] else (
+        f'{"dropped: edges merged":>24}' if np.isnan(Q[k]) else
+        f'{Q[k]:15.5f} rejected')
     print(f'{nm:>7} {note}')
 print(f'  mean {Q_MEAN:.5f} ms over {ok.sum()} gauges, '
       f'spread {np.ptp(Q[ok])*1e3:.3f} us ({np.ptp(Q[ok])/Q_MEAN:.1e})')
-print(f'\nc0 = 2 xi_ref / Q  : {c0_id:.3f} mm/ms')
-print(f'c0 true            : {d["c0"]:.3f} mm/ms   rel err {(c0_id/d["c0"]-1):+.2e}')
-print(f'tape contributes   : +-{XI_REF_TOLERANCE/XI_REF:.1e} '
-      f'(+-{c0_id*XI_REF_TOLERANCE/XI_REF:.2f} mm/ms), which dominates '
+print(f'\nc0 = 2 L_free_ref / Q : {c0_id:.3f} mm/ms')
+print(f'c0 true               : {d["c0"]:.3f} mm/ms   '
+      f'rel err {(c0_id/d["c0"]-1):+.2e}')
+print(f'tape contributes      : +-{L_FREE_REF_TOL/L_FREE_REF:.1e} '
+      f'(+-{c0_id*L_FREE_REF_TOL/L_FREE_REF:.2f} mm/ms), which dominates '
       f'everything else')
 
 # --------------------------------------------------------------------------
 # positions -- from the lags, so every gauge gets one, merged edges or not
 # --------------------------------------------------------------------------
-xi = XI_REF - c0_id * lag
+L_free = L_FREE_REF - c0_id * lag
 id_pos = np.where(np.arange(len(names)) >= n_in,
-                  L_OUTPUT - xi, xi - L_OUTPUT - L_JOINT)
+                  L_OUTPUT - L_free, L_free - L_OUTPUT - L_JOINT)
 
-# What the tape costs each position. xi_k = xi_ref (1 - 2 lag_k / Q), so
-# d(xi_k) = (xi_k / xi_ref) d(xi_ref); and x is xi plus a CONSTANT (L_OUTPUT,
-# L_JOINT) that the tape error does not touch, so the position inherits that as
-# an ABSOLUTE band rather than a relative one. It is much the largest entry on
-# this table, and the only one that is not the timing's fault.
-xi_band = XI_REF_TOLERANCE * xi / XI_REF
+# What the tape costs each position. L_free_k = L_free_ref (1 - 2 lag_k / Q), so
+# d(L_free_k) = (L_free_k / L_free_ref) d(L_free_ref); and x is L_free plus a
+# CONSTANT (L_OUTPUT, L_JOINT) that the tape error does not touch, so the
+# position inherits that as an ABSOLUTE band rather than a relative one. It is
+# much the largest entry on this table, and the only one that is not the
+# timing's fault.
+L_free_band = L_FREE_REF_TOL * L_free / L_FREE_REF
 
 print('\n--- gauge positions '
       '-------------------------------------------------------')
-print(f'{"gauge":>7} {"xi (to free end)":>18} {"x (from face)":>15} '
+print(f'{"gauge":>7} {"L_free (to end)":>18} {"x (from face)":>15} '
       f'{"+-tape":>8} {"true":>9} {"error":>9}')
 for k, nm in enumerate(names):
-    print(f'{nm:>7} {xi[k]:18.2f} {id_pos[k]:15.2f} {xi_band[k]:8.2f} '
+    print(f'{nm:>7} {L_free[k]:18.2f} {id_pos[k]:15.2f} {L_free_band[k]:8.2f} '
           f'{true_pos[k]:9.2f} {id_pos[k]-true_pos[k]:+9.3f}')
 
 print('\n--- gauge spacing D '
@@ -409,30 +434,30 @@ for bar, off, cnt in (('in', 0, n_in), ('out', n_in, len(names) - n_in)):
     print(f'{bar:>7} {dl*1e3:12.4f} {D_id:12.3f} {D_true:9.2f} '
           f'{D_id-D_true:+9.3f}')
 
-# The errors in the "error" columns are what the TIMING costs, with xi_ref taken
-# as exact. The tape error is separate and adds on top -- but NOT uniformly, and
-# the distinction matters:
+# The errors in the "error" columns are what the TIMING costs, with L_free_ref
+# taken as exact. The tape error is separate and adds on top -- but NOT
+# uniformly, and the distinction matters:
 #
-#   c0, D, xi   scale with xi_ref, so they carry a RELATIVE band. D is the one
-#               the reduction actually leans on, and the ratio xi_ref/D is the
-#               leverage that makes it small.
-#   x (positions) are xi plus a constant, so they carry an ABSOLUTE band of
-#               order the tape error itself -- ~10x worse in relative terms, and
-#               NOT improved by the leverage. It is benign anyway, because a
-#               common offset mostly shifts where the wave is reconstructed
-#               rather than distorting it, but it is not the +-_f the older
-#               version of this message implied.
-_f = XI_REF_TOLERANCE / XI_REF
+#   c0, D, L_free   scale with L_free_ref, so they carry a RELATIVE band. D is
+#                   the one the reduction actually leans on, and the ratio
+#                   L_free_ref/D is the leverage that makes it small.
+#   x (positions)   are L_free plus a constant, so they carry an ABSOLUTE band
+#                   of order the tape error itself -- ~10x worse in relative
+#                   terms, and NOT improved by the leverage. It is benign
+#                   anyway, because a common offset mostly shifts where the wave
+#                   is reconstructed rather than distorting it, but it is not
+#                   the +-_f the older version of this message implied.
+_f = L_FREE_REF_TOL / L_FREE_REF
 _D = c0_id * abs(lag[1] - lag[0])
-print(f'\nwith a tape good to +-{XI_REF_TOLERANCE:.1f} mm on the '
-      f'{XI_REF:.0f} mm reference baseline:\n'
-      f'  c0, D, xi   +-{_f:.1e} relative: +-{c0_id*_f:.1f} mm/ms on c0, '
+print(f'\nwith a tape good to +-{L_FREE_REF_TOL:.1f} mm on the '
+      f'{L_FREE_REF:.0f} mm reference baseline:\n'
+      f'  c0, D, L_free  +-{_f:.1e} relative: +-{c0_id*_f:.1f} mm/ms on c0, '
       f'+-{_D*_f:.2f} mm on D\n'
-      f'  positions   +-{xi_band.min():.2f} to +-{xi_band.max():.2f} mm '
-      f'ABSOLUTE (the +-tape column above)\n'
-      f'The leverage on D is the ratio xi_ref/D = {XI_REF/_D:.1f}: a sloppy '
-      f'measurement on a long\nbaseline buys a sharp one on a short baseline. '
-      f'It does not help the positions.')
+      f'  positions      +-{L_free_band.min():.2f} to '
+      f'+-{L_free_band.max():.2f} mm ABSOLUTE (the +-tape column above)\n'
+      f'The leverage on D is the ratio L_free_ref/D = {L_FREE_REF/_D:.1f}: a '
+      f'sloppy measurement on a long\nbaseline buys a sharp one on a short '
+      f'baseline. It does not help the positions.')
 
 # --------------------------------------------------------------------------
 # the symmetry that was NOT assumed, measured instead
@@ -456,9 +481,10 @@ if n_pair:
 print('\n--- transit times, which is what separate() really needs '
       '-------------')
 print('separate() depends on x_k/c0 only. Note these do NOT inherit the tape\n'
-      'error as a small relative number: x is xi plus a constant the tape does\n'
-      'not scale, so a tape error moves them absolutely. What IS scale-free is\n'
-      'xi/c0 -- the free-end null below tests exactly that, and nothing else.\n')
+      'error as a small relative number: x is L_free plus a constant the tape\n'
+      'does not scale, so a tape error moves them absolutely. What IS\n'
+      'scale-free is L_free/c0 -- the free-end null below tests exactly that,\n'
+      'and nothing else.\n')
 print(f'{"gauge":>7} {"x/c0 [us]":>12} {"true [us]":>12} {"rel err":>10}')
 for k, nm in enumerate(names):
     a, b = id_pos[k] / c0_id, true_pos[k] / d['c0']
@@ -470,11 +496,11 @@ for k, nm in enumerate(names):
 # The far end of the output bar is a free surface, so the stress there is zero
 # at all times and the two travelling waves must cancel:
 #
-#     eps_plus + eps_minus = 0     at xi = 0
+#     eps_plus + eps_minus = 0     at L_free = 0
 #
-# Reconstruct AT that surface -- hand `separate` the identified xi, which are
-# distances from it -- and the boundary condition becomes a residual that should
-# vanish. Nothing here consults the true geometry, which is what makes this the
+# Reconstruct AT that surface -- hand `separate` the identified L_free, which
+# are distances from it -- and the boundary condition becomes a residual that
+# should vanish. Nothing here consults the true geometry, which makes this the
 # one validation that survives contact with a real rig, where there is no truth
 # to compare c0 or the positions against.
 #
@@ -482,20 +508,24 @@ for k, nm in enumerate(names):
 # the coupler's extra transit time enters Q identically at every gauge and
 # cancels out of the spread, but it does not cancel here. Do not oversell that:
 # a 150 mm coupler at 0.9 rho moves this residual only from 1.2e-3 to 3.5e-3,
-# because the null constrains xi/c0 on baselines of METRES, where the coupler's
-# bias is relatively small. The damage downstream lands on x/c0 instead, over
+# because the null constrains L_free/c0 on baselines of METRES, where the
+# coupler's bias is relatively small. The damage lands on x/c0 instead, over
 # baselines of ~130 mm, where the same absolute error is 20x larger in relative
 # terms -- which is why the reduction degrades more than this number suggests.
 # Treat a FAIL as conclusive and a PASS as weak evidence.
 #
-# What it CANNOT do is break the scale degeneracy. Scaling xi and c0 together
-# leaves the residual identical to seven digits (verified), because the test
-# constrains the transit times xi/c0 and nothing else -- which is exactly the
-# quantity separate() consumes, and exactly the quantity xi_ref cannot fix.
+# What it CANNOT do is break the scale degeneracy. Scaling L_free and c0
+# together leaves the residual identical to seven digits (verified), because the
+# test constrains the transit times L_free/c0 and nothing else -- which is
+# exactly what separate() consumes, and exactly what L_free_ref cannot fix.
+#
+# Note the third argument: `separate` calls its positions x and phases them with
+# the wavenumber xi. Here they are L_free, distances from the FREE END rather
+# than from a bar face, which is what moves the reconstruction to that surface.
 NULL_WINDOW = cfg.get('null_window', 0.75)
 NULL_TOL = cfg.get('null_tol', 5.0e-3)
 
-p_free, m_free = separate(t, signals, xi, c0=c0_id, eta=d['eta'])
+p_free, m_free = separate(t, signals, L_free, c0=c0_id, eta=d['eta'])
 _total = p_free + m_free
 _amp = np.abs(p_free).max()
 
@@ -521,9 +551,9 @@ print(f'threshold              : {NULL_TOL:.1e}   ->  '
       f'{"PASS" if null_rms <= NULL_TOL else "FAIL"}')
 if null_rms > NULL_TOL:
     print('  The free surface does not come out stress-free, so the transit\n'
-          '  times xi/c0 are wrong. Most likely: a coupler that is not bar\n'
-          '  material, or the wrong coupler length. Note xi_ref is NOT the\n'
-          '  suspect -- this test is blind to it.')
+          '  times L_free/c0 are wrong. Most likely: a coupler that is not\n'
+          '  bar material, or the wrong coupler length. Note L_free_ref is\n'
+          '  NOT the suspect -- this test is blind to it.')
 
 # --------------------------------------------------------------------------
 # density: NOT identifiable from the records; closed with the bar's mass

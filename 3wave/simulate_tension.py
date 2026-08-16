@@ -246,7 +246,8 @@ class SimulateSHTB:
         self.rec = GaugeRecorder(
             self.specimenIndices, self.dx0, self.L, self.gauge_distances,
             self.num_timesteps, self.N_x,
-            record_full_field=self.record_full_field)
+            record_full_field=self.record_full_field,
+            bar_indices=(self.inputBarIndices, self.outputBarIndices))
 
     def apply_initial_conditions(self):
         # striker launched toward the anvil, i.e. in -x, away from the specimen

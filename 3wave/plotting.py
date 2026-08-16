@@ -22,7 +22,7 @@ argparse must own the whole command line -- an unknown flag is an error, so
 --headless cannot be parsed separately from the rest:
 
     ap = argparse.ArgumentParser(...)
-    ap.add_argument('--xi-ref', type=float, ...)
+    ap.add_argument('--l-free-ref', type=float, ...)
     HEADLESS, args = plotting.init(parser=ap)   # two values, not one
 """
 

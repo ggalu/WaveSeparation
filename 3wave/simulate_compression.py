@@ -173,7 +173,8 @@ class SimulateDirectImpact:
         self.rec = GaugeRecorder(
             self.specimenIndices, self.dx0, self.L, self.gauge_distances,
             self.num_timesteps, self.N_x,
-            record_full_field=self.record_full_field)
+            record_full_field=self.record_full_field,
+            bar_indices=(self.inputBarIndices, self.outputBarIndices))
 
     def initialize_time_discretization(self):
         self.c0 = np.sqrt(self.E_bar / self.rho)

@@ -72,8 +72,8 @@ exp(+eta*t) is applied on the way out, so eta * t_max much above ~30 overflows.
 
 import numpy as np
 
-__all__ = ['separate', 'backpropagate', 'bar_interface', 'specimen_response',
-           'conditioning', 'single_wave_window']
+__all__ = ['separate', 'separate_field', 'backpropagate', 'bar_interface',
+           'specimen_response', 'conditioning', 'single_wave_window']
 
 
 def _wavenumber(f, c0, eta, dispersion):
@@ -89,45 +89,26 @@ def _wavenumber(f, c0, eta, dispersion):
     return (w - 1j * eta) / cp
 
 
-def separate(t, signals, positions, c0, eta, n_fft=None, dispersion=None):
+def _pm_spectra(t, signals, positions, c0, eta, n_fft, dispersion):
     """
-    Separate measured strain histories into the two travelling waves at x = 0.
+    Validate the inputs and solve the normal equations, in the frequency domain.
 
-    Parameters
-    ----------
-    t : (N,) array
-        Uniformly sampled time. Must start at the beginning of the record and
-        the signals must be quiescent at t[0].
-    signals : sequence of (N,) arrays
-        Strain (or any quantity proportional to it -- force, volts) at each
-        gauge. Two or more; three is the usual choice.
-    positions : sequence of float
-        Distance of each gauge from the interface, same order as `signals`,
-        in the same length unit as `c0 * t`. All must be > 0.
-    c0 : float
-        Elastic bar wave speed.
-    eta : float
-        Exponential-window / Laplace damping, units 1/time. Must be > 0.
-    n_fft : int, optional
-        Transform length. Defaults to the next power of two above 4*N, which
-        zero-pads enough to keep the wrap-around out of the record.
-    dispersion : None | callable | (freq, cp_over_c0)
-        Phase-velocity dispersion. None means non-dispersive (c_p = c0), which
-        is the right choice for 1D simulated data. A callable or a lookup table
-        returns c_p / c0 as a function of frequency -- e.g. the Pochhammer-Chree
-        curve in Results_Raw/pochhammer.mat.
+    Returns the two wave SPECTRA at x = 0 -- still windowed, still complex --
+    together with the axes needed to invert them. `separate` and
+    `separate_field` are both thin wrappers around this, so the method exists
+    once and only once.
 
     Returns
     -------
-    eps_plus, eps_minus : (N,) arrays
-        Strain histories at x = 0 of the wave travelling toward +x and toward
-        -x respectively. Their sum is the total strain at the interface.
-
-    Notes
-    -----
-    The ordering of the gauges is irrelevant: every term in the normal
-    equations is a symmetric sum over gauges. Permuting `signals` and
-    `positions` together cannot change the result.
+    P, M : (n_fft//2 + 1,) complex
+        The plus and minus spectra at x = 0, in the exp(-eta t) domain.
+    xi : (n_fft//2 + 1,) complex
+        The wavenumber axis. Propagating to a station x is multiplication by
+        exp(-i xi x) for P and exp(+i xi x) for M.
+    n_fft : int
+        The resolved transform length.
+    tau : (n,) float
+        t - t[0], so that exp(+eta tau) can undo the window.
     """
     t = np.asarray(t, float)
     sig = [np.asarray(s, float) for s in signals]
@@ -184,13 +165,147 @@ def separate(t, signals, positions, c0, eta, n_fft=None, dispersion=None):
 
     P = (h2 * E1 - g * E2) / det
     M = (-np.conj(g) * E1 + h1 * E2) / det
+    return P, M, xi, n_fft, tau
 
+
+def separate(t, signals, positions, c0, eta, n_fft=None, dispersion=None):
+    """
+    Separate measured strain histories into the two travelling waves at x = 0.
+
+    Parameters
+    ----------
+    t : (N,) array
+        Uniformly sampled time. Must start at the beginning of the record and
+        the signals must be quiescent at t[0].
+    signals : sequence of (N,) arrays
+        Strain (or any quantity proportional to it -- force, volts) at each
+        gauge. Two or more; three is the usual choice.
+    positions : sequence of float
+        Distance of each gauge from the interface, same order as `signals`,
+        in the same length unit as `c0 * t`. All must be > 0.
+    c0 : float
+        Elastic bar wave speed.
+    eta : float
+        Exponential-window / Laplace damping, units 1/time. Must be > 0.
+    n_fft : int, optional
+        Transform length. Defaults to the next power of two above 4*N, which
+        zero-pads enough to keep the wrap-around out of the record.
+    dispersion : None | callable | (freq, cp_over_c0)
+        Phase-velocity dispersion. None means non-dispersive (c_p = c0), which
+        is the right choice for 1D simulated data. A callable or a lookup table
+        returns c_p / c0 as a function of frequency -- e.g. the Pochhammer-Chree
+        curve in Results_Raw/pochhammer.mat.
+
+    Returns
+    -------
+    eps_plus, eps_minus : (N,) arrays
+        Strain histories at x = 0 of the wave travelling toward +x and toward
+        -x respectively. Their sum is the total strain at the interface.
+
+    Notes
+    -----
+    The ordering of the gauges is irrelevant: every term in the normal
+    equations is a symmetric sum over gauges. Permuting `signals` and
+    `positions` together cannot change the result.
+    """
+    P, M, xi, n_fft, tau = _pm_spectra(t, signals, positions, c0, eta,
+                                       n_fft, dispersion)
     # inverse: back to time, then undo the window
-    out = []
-    for X in (P, M):
-        y = np.fft.irfft(X, n=n_fft)[:n]
-        out.append(y * np.exp(+eta * tau))
-    return out[0], out[1]
+    n = len(tau)
+    amp = np.exp(+eta * tau)
+    return (np.fft.irfft(P, n=n_fft)[:n] * amp,
+            np.fft.irfft(M, n=n_fft)[:n] * amp)
+
+
+def separate_field(t, signals, positions, c0, eta, x, n_fft=None,
+                   dispersion=None, decimate=1, chunk=64):
+    """
+    The two separated waves as a FIELD: reconstructed at many x, not just x = 0.
+
+    The same solve as `separate` -- literally the same private core -- evaluated
+    at every station in `x`. This is what a Lagrange (x-t) diagram consumes.
+
+    The propagation is applied in the FREQUENCY domain, to P(w) and M(w), and
+    that is the only correct way to do it. Taking `separate`'s TIME-domain
+    output and re-transforming it is LOSSY: `separate` ends with
+    `irfft(X, n_fft)[:n]`, discarding n_fft - n samples whose content is not
+    zero, so the re-transform is a different signal. Measured on the shipped
+    tension dump, reproducing the recorded gauge strains:
+
+        this route, spectra kept          9.3e-15
+        re-FFT of separate()'s output     1.4e-01     <-- silently wrong
+
+    `backpropagate` is no help either: it re-transforms on every call, and it
+    rejects `position <= 0`, which excludes the interface plane itself.
+
+    Parameters
+    ----------
+    t, signals, positions, c0, eta, n_fft, dispersion
+        Exactly as for `separate`.
+    x : (n_x,) array
+        Where to reconstruct, in this bar's LOCAL coordinate: 0 is the
+        interface, positive goes INTO the bar, away from the specimen. Unlike
+        `positions` these are unrestricted -- 0 and negative values are fine,
+        because propagating is multiplication by a phase, not division by one.
+        Reconstructing outside the uniform bar is EXTRAPOLATION; this function
+        cannot know where the bar ends, so masking that is the caller's job.
+    decimate : int
+        Block-mean this many consecutive samples into one output row. The
+        record is heavily oversampled -- the wavefront here is ~380 samples
+        wide -- so 16 costs 0.5 % of the peak and saves 16x the memory.
+    chunk : int
+        Stations synthesised per FFT batch. The intermediate is
+        (chunk, n_fft//2+1) complex plus (chunk, n_fft) real, so this bounds
+        peak memory: measured 208 MB at 64 against 913 MB for 400 in one go.
+
+    Returns
+    -------
+    eps_plus, eps_minus : (n_x, n_out) arrays
+    t_out : (n_out,) array
+        Block-centre times; identical to `t` when decimate == 1.
+
+    Notes
+    -----
+    With `dispersion=None` this is an EXACT time shift and nothing more:
+    xi = (w - i eta)/c0, so exp(-i xi x) = exp(-i w x/c0) exp(-eta x/c0) and
+    the eta factor cancels against the exp(+eta t) that undoes the window.
+    Hence eps_plus(x, t) = eps_plus(0, t - x/c0) to ~1e-15, and |eps_plus| is
+    CONSTANT along x. The separated field is therefore a shear of two 1-D
+    signals: a good picture and a sharp test, but not by itself a validation.
+    Their SUM is not trivial, and it is what carries the physics -- at a free
+    surface the two must cancel, and they do.
+    """
+    P, M, xi, n_fft, tau = _pm_spectra(t, signals, positions, c0, eta,
+                                       n_fft, dispersion)
+    x = np.atleast_1d(np.asarray(x, float))
+    n = len(tau)
+    c0 = float(c0)
+
+    # The minus branch grows as exp(+eta x / c0) on the way out; combined with
+    # the record's own exp(+eta T) this is what can overflow.
+    span = (tau[-1] - tau[0]) + np.abs(x).max() / c0
+    if eta * span > 700:
+        raise ValueError(f'eta * (record + max transit) = {eta*span:.1f}; '
+                         'exp(+eta t) will overflow. Reduce eta or the x range.')
+
+    q = max(1, int(decimate))
+    n_out = n // q
+    if n_out < 1:
+        raise ValueError(f'decimate={q} leaves no samples in a record of {n}')
+    keep = n_out * q                       # drop the ragged tail, if any
+    amp = np.exp(+eta * tau)[:keep]
+    t_out = np.asarray(t, float)[:keep].reshape(n_out, q).mean(axis=1)
+
+    out_p = np.empty((len(x), n_out))
+    out_m = np.empty((len(x), n_out))
+    for i in range(0, len(x), int(chunk)):
+        xb = x[i:i + int(chunk)][:, None]
+        for X, sign, dst in ((P, -1j, out_p), (M, +1j, out_m)):
+            y = np.fft.irfft(X[None, :] * np.exp(sign * xi[None, :] * xb),
+                             n=n_fft, axis=1)[:, :keep] * amp
+            dst[i:i + int(chunk)] = y.reshape(len(xb), n_out, q).mean(axis=2)
+            del y
+    return out_p, out_m, t_out
 
 
 def backpropagate(t, signal, position, c0, eta=0.0, n_fft=None, dispersion=None,

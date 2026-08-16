@@ -33,6 +33,14 @@ Geometry and units (mm, ms, kg => kN, GPa; mm/ms == m/s):
     X_IN, X_OUT           the two interface planes [mm] -- what the separation
                           reconstructs at, and what gauge distances measure from
     L_free_in/out         interface to that bar's far end [mm]
+    L_bar_in/out          interface to the end of the UNIFORM bar [mm]. Equal
+                          to L_free_* unless another material sits between the
+                          bar and its far end -- the SHTB's 20 mm steel anvil
+                          does, so L_bar_in is 3000 against L_free_in's 3020.
+                          This, not L_free_*, is how far a reconstruction from
+                          separate() / separate_field() is valid: past it the
+                          wave speed is no longer c0 and the result is
+                          extrapolation through the wrong material.
     L_specimen, A_specimen    original specimen length [mm] and area [mm^2]
     v0_in, v0_out         rigid-body bar velocity before any wave arrives
                           [mm/ms]. Separation cannot see rigid-body motion, so
@@ -90,6 +98,10 @@ def load_dump(path=DUMP_FILE):
               'L_free_out', 'L_specimen', 'A_specimen', 'v0_in', 'v0_out',
               'eta'):
         d[k] = float(d[k])
+    # Added later than the rest; a dump written before it falls back to the
+    # far-end distance, which is right for every bar that has nothing beyond it.
+    for k, fallback in (('L_bar_in', 'L_free_in'), ('L_bar_out', 'L_free_out')):
+        d[k] = float(d[k]) if k in d else d[fallback]
     for k in ('N', 'iface_in', 'iface_out'):
         d[k] = int(d[k])
     d['loading'] = str(d['loading'])

@@ -86,8 +86,8 @@ gauges = [130.0, 530.0, 1177.0]   # mm from the interface plane
 ## What gets recorded
 
 The simulators used to keep strain and force for **every element at every
-timestep** — for the tension case a 6030 × 36861 pair of arrays, 3.6 GB in
-memory and 1.8 GB on disk, to produce six gauge signals. They now record only
+timestep** — for the tension case a 6030 × 23038 pair of arrays, 2.2 GB in
+memory and 1.1 GB on disk, to produce six gauge signals. They now record only
 what is consumed:
 
 | Recorded | Why |
@@ -160,7 +160,10 @@ where
 
 is the complex wavenumber. Its imaginary part is where the exponential window
 $e^{-\eta t}$, applied before the FFT, enters: it shifts the transform off the
-real frequency axis.
+real frequency axis. ξ is 1/length and complex, and is used in that sense
+throughout this section and in `wave_separation.py` — the *lengths* the
+calibration identifies are `L_free`, a different quantity, kept under a
+different name for exactly this reason.
 
 The unknowns $P$ and $M$ are the two waves **at $x = 0$**, the interface. Every
 gauge sees the same two unknowns — only the phase factors differ.
@@ -474,6 +477,96 @@ the input bar's normal equations. Measured on the SHTB case, 1+2 and 1+3 agree t
 three digits — both useless — while 2+2 is excellent. Spend gauges on the input
 bar first.
 
+## Seeing the separated waves: the Lagrange diagram
+
+```bash
+python3 drive_tension.py
+python3 lagrange_diagram.py        # ~6 s -> lagrange_diagram.png
+```
+
+Everything above shows the separated waves as time series at one plane. The same
+solve evaluated at several hundred stations along each bar gives them as
+**fields**, and the two families of characteristics become the picture:
+
+![Lagrange diagram of the separated waves](lagrange_diagram.png)
+
+This needs no full-field recording — it runs off the ordinary dump. What it does
+need is `separate_field`, which propagates the $P(\omega)$, $M(\omega)$ **spectra**
+to each station. Reconstructing at an arbitrary $x$ by re-transforming
+`separate`'s *time-domain* output instead is a trap worth knowing about:
+
+| route | reproduces the recorded gauge strain to |
+|---|---|
+| keep the spectra, shift, one inverse (`separate_field`) | **9.3e-15** |
+| re-FFT `separate`'s output and shift that | **1.4e-01** |
+
+`separate` ends with `irfft(X, n_fft)[:n]`, discarding samples whose content is
+not zero, so the re-transform is a different signal. It looks entirely plausible
+on screen, which is why the number is quoted here.
+
+### What it proves, and what it only illustrates
+
+With no dispersion, propagating a separated wave is an **exact time shift** —
+verified to 3e-15 over 391 mm. So $|\varepsilon_+|$ is constant along $x$, and
+panels (a) and (b) are each a shear of one 1-D signal: a good way to see the
+method, a poor way to check it. **Their sum is not a shear**, and the script
+prints three things about it that are checks rather than pictures:
+
+| check | measured (SHTB, 2 gauges/bar) |
+|---|---|
+| sum at the four gauge stations vs the **recorded** strain | 4e-15 … 9e-15 |
+| free-surface null $\varepsilon_+ + \varepsilon_-$ at the output bar's far end | **3.3e-04** of peak |
+| $EA(\varepsilon_+ + \varepsilon_-)$ at $x=0$ vs the simulator's interface force | 4.5e-03 / 4.1e-04 |
+
+The gauge stations are the only $x$ where the field is constrained by data;
+everywhere else it is the model talking, which is why they are marked on the
+figure.
+
+**The free-end null is a boundary layer, and it must be windowed.** Both caveats
+are easy to trip over:
+
+| distance from the free surface | windowed to 0.75 | full record |
+|---|---|---|
+| 0 mm | **3.3e-04** | 6.5e-02 |
+| 10 mm | 3.3e-03 | 6.5e-02 |
+| 100 mm | 3.0e-02 | 6.9e-02 |
+
+The null holds *at* the surface, not near it — 10 mm in it is already 10× worse,
+because just inside the surface the incident and reflected waves are offset by
+$2x/c_0$ and no longer cancel. And over the full record it reads 6.5e-02
+regardless of position: $e^{+\eta t}$ amplifies the record-end truncation, the
+same trap [the free-end null test](#the-free-end-null-test) documents. The
+script windows by default and prints both columns so the 200× is visible rather
+than waiting to be discovered.
+
+### Where the model does not apply
+
+`separate` assumes one uniform bar of speed `c0` on the straight line from each
+gauge to the plane being reconstructed. It assumes nothing about boundary
+conditions, so the mask follows from the **materials**, not from the ends:
+
+- the **anvil** is steel — masked. `L_bar_in` in the dump exists for this: it is
+  3000 mm where `L_free_in` is 3020, and using the latter would extrapolate
+  20 mm through the wrong wave speed;
+- the **specimen** is not a bar and neither separation covers it — masked;
+- the **striker**, over `[20, 820]` mm, is **not** masked. It is a separate chain
+  touching the bar only through the anvil contact, so the bar under it is
+  ordinary aluminium and reconstructs as well as anywhere. What is missing is the
+  striker's *own* strain, which the simulator never records — hence a tint, not a
+  hatch;
+- the last 20 mm of the input bar is **not** masked either. Its far boundary is
+  an anvil rather than a free end, but separation was never told about
+  boundaries, so nothing there changes.
+
+The two halves of every panel are **independent solves** — no gauge on one bar
+enters the other's normal equations, per
+[A consequence worth knowing](#a-consequence-worth-knowing). They meet only
+across the specimen, which is 10 mm on a 6030 mm axis and so is drawn as an
+explicit cut rather than left to a sub-pixel gap.
+
+The script adapts to whatever `dump.npz` holds, so it works on all three cases
+untouched; on the compression bar both far ends are free and it says so.
+
 ## The two implementations, and why both are kept
 
 There are two separation codes in this folder. This is deliberate, not leftover.
@@ -695,32 +788,40 @@ python3 drive_calibration_tension.py    # ~5 s  -> dump.npz
 python3 identify_bar_tension.py         # the identification
 ```
 
-The one number you must supply is `xi_ref`, the tape measurement from a gauge to
-the far free end. It lives in `[calibration_tension]`:
+The one number you must supply is `L_free_ref`, the tape measurement from a gauge
+to the far free end. It lives in `[calibration_tension]`:
 
 ```toml
-xi_ref = 3679.5           # in-1 -> far free end [mm]
-xi_ref_gauge = "in-1"     # which gauge the tape reached; omit = the reference
-xi_ref_tol = 2.0          # what the tape is good to [mm]
+L_free_ref = 3679.5         # in-1 -> far free end [mm]
+L_free_ref_gauge = "in-1"   # which gauge the tape reached; omit = the reference
+L_free_ref_tol = 2.0        # what the tape is good to [mm]
 ```
 
-with `--xi-ref` / `--xi-ref-tol` overriding them for a sensitivity sweep without
-editing the file:
+`L_free` throughout this section is a **distance in mm measured from the free
+surface** — the same family as the dump's `L_free_in` / `L_free_out`, which are
+that distance for a bar face rather than for a gauge. It is *not* the complex
+wavenumber ξ of [Theory](#the-model-per-gauge), which is 1/length and complex.
+These keys were spelled `xi_ref*` until 2026-08-16; that collision is why they
+are not any more.
+
+With `--l-free-ref` / `--l-free-ref-tol` overriding them for a sensitivity sweep
+without editing the file:
 
 ```bash
-python3 identify_bar_tension.py --xi-ref 3681.5     # a +2 mm tape error
-python3 identify_bar_tension.py --xi-ref-tol 0.5    # a better tape
+python3 identify_bar_tension.py --l-free-ref 3681.5     # a +2 mm tape error
+python3 identify_bar_tension.py --l-free-ref-tol 0.5    # a better tape
 ```
 
-**Omit `xi_ref` entirely and the script falls back to the model's own geometry** —
-which a simulation can supply and a rig cannot. That fallback is the self-check
-mode; supplying `xi_ref` is what turns this into an instrument. Any gauge may
-carry the tape: `xi_k = xi_ref (1 − 2·lag_k/Q)` inverts to refer the reading back
+**Omit `L_free_ref` entirely and the script falls back to the model's own
+geometry** — which a simulation can supply and a rig cannot. That fallback is the
+self-check mode; supplying `L_free_ref` is what turns this into an instrument.
+Any gauge may carry the tape: `L_free_k = L_free_ref (1 − 2·lag_k/Q)` inverts to
+refer the reading back
 to whichever gauge the record picks as reference, at the cost of dividing the
 tolerance by that same factor — measuring `out-1` instead of `in-1` on this rig
 inflates ±2.0 mm to ±3.0 mm. Because the configured value depends on the gauge
 layout and the bar lengths, the script cross-checks it against the model geometry
-and warns when the two disagree by more than `xi_ref_tol`.
+and warns when the two disagree by more than `L_free_ref_tol`.
 
 `[calibration_tension]` in `config.toml` is the SHTB with the specimen replaced by the
 rig's own 150 mm threaded coupler, in bar stock at bar diameter, so the joint
@@ -745,13 +846,14 @@ no way around this and no cleverness that avoids it.
 
 The script asks for the least painful one: the distance from a single gauge — the
 one the wave reaches first, hence the one furthest from the free end — to the far
-free end. Call it `xi_ref`. Everything else is leverage:
+free end. Call it `L_free_ref`. Everything else is leverage:
 
 ```math
-\frac{\delta c_0}{c_0} \;=\; \frac{\delta D}{D} \;=\; \frac{\delta \xi_\text{ref}}{\xi_\text{ref}}
+\frac{\delta c_0}{c_0} \;=\; \frac{\delta D}{D}
+  \;=\; \frac{\delta L_\text{free,ref}}{L_\text{free,ref}}
 ```
 
-**The point is the ratio `xi_ref/D`**, which is 9.2 here. A tape measurement good
+**The point is the ratio `L_free_ref/D`**, which is 9.2 here. A tape measurement good
 to ±2 mm over the 3680 mm reference baseline lands `D` to ±0.22 mm on a 400 mm
 spacing. A sloppy measurement on a long baseline buys a sharp one on a short
 baseline — and the short baseline is precisely the one you cannot measure.
@@ -762,7 +864,9 @@ shipped layout it recovers the true −1.000 mm (a mesh-rounding artefact, not a
 real offset) to within 0.28 mm, so it would catch a real mismatch.
 
 The trade is better still because of what the reduction consumes. In `separate`
-the positions enter only as $\xi x_k = (\omega - i\eta)x_k/c_0$, so the result
+the positions enter only as $\xi x_k = (\omega - i\eta)x_k/c_0$ — that ξ is the
+complex wavenumber of [The model, per gauge](#the-model-per-gauge), not a length
+— so the result
 depends on the **transit times** $x_k/c_0$ and nothing else — scaling positions
 and `c0` together by any factor moves the separated waves by 4e-14 relative. `c0`
 alone is still needed, but only in `bar_interface`, where it converts strain to
@@ -782,29 +886,29 @@ so **the free-end echo arrives while the direct pulse is still passing** — at 
 gauge nearest the free end it arrives 118 us before the direct pulse has even
 ended. Matched-filtering whole pulses, which is the obvious approach and works
 perfectly with a short striker, **fails outright here**: measured errors of 10 to
-50 % on `2 xi/c0`, with one estimate off by a factor of 4, because the correlation
+50 % on `2 L_free/c0`, with one estimate off by a factor of 4, because the correlation
 peak it locks onto is the direct pulse's own trailing edge rather than the echo.
 
-Differentiating first fixes it. In the derivative a gauge `xi` from the free end
+Differentiating first fixes it. In the derivative a gauge `L_free` from the free end
 sees four sharp features:
 
 | delay | sign | what |
 |---|---|---|
 | 0 | + | the pulse arriving |
 | `P` | − | its own trailing edge (`P` = striker pulse length) |
-| `2 xi / c0` | − | the free-end echo arriving, inverted |
-| `2 xi/c0 + P` | + | that echo's trailing edge |
+| `2 L_free / c0` | − | the free-end echo arriving, inverted |
+| `2 L_free/c0 + P` | + | that echo's trailing edge |
 
 The flat top of a long pulse differentiates to nothing, so pulse length stops
 mattering — only edge sharpness does (59 us, 10–90 %, here).
 
 The two negative edges are told apart with **nothing assumed about the striker**:
-`P` is identical at every gauge and `2 xi/c0` is not, so `P` is whichever delay a
+`P` is identical at every gauge and `2 L_free/c0` is not, so `P` is whichever delay a
 majority of gauges share. Where the two happen to land within an edge width of
 each other the gauge shows one merged peak instead of two — `out-0` does, at 40 us
 separation — and it is simply dropped from the `c0` average. Its position still
 comes through, because that is derived from the gauge-to-gauge lag, which is
-always clean. The consistency check makes the rejection automatic: `Q = 2 xi/c0 +
+always clean. The consistency check makes the rejection automatic: `Q = 2 L_free/c0 +
 2·lag` must be identical at every gauge, and the three good ones agree to **0.07 us**
 while the merged one is out by a factor of three.
 
@@ -835,15 +939,15 @@ needed at all — the bar's own length does the job.
 | transit times `x/c0` | — | — | −4.5e-04 to +1.7e-03 |
 | `E` from `rho c0^2` | 71.646 GPa | 71.700 | −7.6e-04 |
 
-Those are the errors the **timing** costs, with `xi_ref` exact. On a rig the tape
+Those are the errors the **timing** costs, with `L_free_ref` exact. On a rig the tape
 error adds on top — but not uniformly, and the distinction matters:
 
 | quantity | tape band | why |
 |---|---|---|
-| `c0`, `D`, `xi` | ±5.4e-04 **relative** (±2.7 mm/ms, ±0.22 mm) | they scale with `xi_ref` |
-| gauge positions `x` | **±1.34 to ±2.00 mm absolute** | `x = xi +` a constant the tape never touches |
+| `c0`, `D`, `L_free` | ±5.4e-04 **relative** (±2.7 mm/ms, ±0.22 mm) | they scale with `L_free_ref` |
+| gauge positions `x` | **±1.34 to ±2.00 mm absolute** | `x = L_free +` a constant the tape never touches |
 
-The leverage ratio `xi_ref/D` = 9.2 is what makes the first row small. **It does
+The leverage ratio `L_free_ref/D` = 9.2 is what makes the first row small. **It does
 nothing for the second.** Each gauge's band is reported in the `±tape` column of
 the positions table. In practice this is benign — a common offset mostly moves
 where the wave is reconstructed rather than distorting it, and `D`, which the
@@ -897,17 +1001,17 @@ have. **This one does not.** The far end of the output bar is a free surface, so
 the stress there is zero at all times:
 
 ```math
-\varepsilon_+ + \varepsilon_- = 0 \qquad\text{at}\qquad \xi = 0
+\varepsilon_+ + \varepsilon_- = 0 \qquad\text{at}\qquad L_\text{free} = 0
 ```
 
-Hand `separate` the identified `xi` — distances *from that surface* — and the
+Hand `separate` the identified `L_free` — distances *from that surface* — and the
 boundary condition becomes a residual that should vanish. It consumes nothing but
 the record and the identified numbers, which makes it the only validation in the
 script that survives contact with a real bar. It runs automatically and prints a
 PASS/FAIL, and the bottom two panels of `bar_identification_tension.png` show it:
 `ε₊` and `ε₋` as mirror images, then their sum against the threshold band.
 
-| `xi`, `c0` from | rms residual |
+| `L_free`, `c0` from | rms residual |
 |---|---|
 | simulator truth (the floor — numerical dispersion) | 7.86e-04 |
 | **`identify_bar_tension.py`** | **1.21e-03** — PASS |
@@ -916,14 +1020,14 @@ PASS/FAIL, and the bottom two panels of `bar_identification_tension.png` show it
 
 Three things are worth knowing before leaning on it.
 
-**It cannot break the scale degeneracy.** Scaling `xi` and `c0` together leaves
+**It cannot break the scale degeneracy.** Scaling `L_free` and `c0` together leaves
 the residual identical to seven digits — verified at λ = 0.95, 1.00, 1.05. It
-constrains the transit times `xi/c0` and nothing else, which is exactly what
-`separate` consumes and exactly what `xi_ref` cannot fix. A FAIL never implicates
+constrains the transit times `L_free/c0` and nothing else, which is exactly what
+`separate` consumes and exactly what `L_free_ref` cannot fix. A FAIL never implicates
 your tape measurement.
 
 **It is a coarse screen, not a precision check.** It separates a good calibration
-from the mismatched coupler by only 2.9×, because the null constrains `xi/c0` over
+from the mismatched coupler by only 2.9×, because the null constrains `L_free/c0` over
 baselines of *metres*, where the coupler's bias is relatively small. The damage
 downstream lands on `x/c0` over baselines of ~130 mm, where the same absolute
 error is 20× larger in relative terms. **Treat a FAIL as conclusive and a PASS as
@@ -949,8 +1053,8 @@ with the simulator's own exact values:
 |---|---|---|
 | simulator truth (the ceiling) | 1.87e-03 | 2.27e-03 |
 | **`identify_bar_tension.py`, 800 mm striker** | **2.18e-03** | **3.70e-03** |
-| … with a −2 mm tape error on `xi_ref` | 2.89e-03 | 4.24e-03 |
-| … with a +2 mm tape error on `xi_ref` | 1.94e-03 | 3.16e-03 |
+| … with a −2 mm tape error on `L_free_ref` | 2.89e-03 | 4.24e-03 |
+| … with a +2 mm tape error on `L_free_ref` | 1.94e-03 | 3.16e-03 |
 | nominal positions (130/530), exact `c0` | 2.01e-03 | 4.01e-03 |
 | exact positions, `c0` off by 1 % | 2.62e-02 | 1.86e-02 |
 | uncalibrated: 2 mm out, 1 % on `c0` | 5.45e-02 | 3.50e-02 |
@@ -1082,8 +1186,8 @@ specimen reduction, which is what the floor is actually made of.
 
 | File | Purpose |
 |---|---|
-| `wave_separation.py` | **The library — use this one.** `separate`, `backpropagate`, `bar_interface`, `specimen_response`, `conditioning`, `single_wave_window`. numpy only. |
-| `config.toml` | **All parameters, both cases** — materials, geometry, gauge locations, numerics, `eta`, and the calibration's `xi_ref`. |
+| `wave_separation.py` | **The library — use this one.** `separate`, `separate_field`, `backpropagate`, `bar_interface`, `specimen_response`, `conditioning`, `single_wave_window`. numpy only. |
+| `config.toml` | **All parameters, both cases** — materials, geometry, gauge locations, numerics, `eta`, and the calibration's `L_free_ref`. |
 | `config.py` | Reads and validates `config.toml`. stdlib `tomllib`, no dependency. |
 | `recording.py` | Records only the gauge / interface / specimen rows. Resolves gauge distance → element, once, for both simulators. |
 | `dump.py` | Writes and reads `dump.npz`. Its docstring lists every field. |
@@ -1092,8 +1196,9 @@ specimen reduction, which is what the floor is actually made of.
 | `drive_compression.py` | Runs `simulate_compression.py`, writes `dump.npz`. Three lines — it sets nothing. |
 | `drive_tension.py` | Same for `simulate_tension.py`. Writes the same filename — the dumps overwrite each other. |
 | `drive_calibration_tension.py` | Runs the connected-bar calibration shot (`[calibration_tension]`, no specimen) through `simulate_tension.py`. |
-| `identify_bar_tension.py` | Recovers gauge positions, spacing `D` and `c0` from that shot's echo train. Never reads the configured gauge list. Needs one measured length: `xi_ref` in `config.toml`, or `--xi-ref`. |
+| `identify_bar_tension.py` | Recovers gauge positions, spacing `D` and `c0` from that shot's echo train. Never reads the configured gauge list. Needs one measured length: `L_free_ref` in `config.toml`, or `--l-free-ref`. |
 | `reduce_specimen.py` | Full chain: gauges → specimen stress/strain, validated against the simulator's own measurement. `--headless` to skip the window. |
+| `lagrange_diagram.py` | The separated waves as x-t FIELDS across the whole assembly, from the ordinary dump. Prints the gauge round trip, the free-surface null and the interface force as numbers. |
 | `plot_forces.py` | Raw gauge forces vs average specimen force. Shows when wave overlap begins. |
 | `gauge_count_study.py` | How many gauges per bar are needed; compares 3+3, 2+3, 1+2, 1+1. |
 | `sep_test.py` | Separation accuracy vs the simulator's interface force; eta sweep. |
@@ -1102,7 +1207,8 @@ specimen reduction, which is what the floor is actually made of.
 
 Generated at run time and safe to delete (`./clean.sh`): `dump.npz`,
 `specimen.dat`, `specimen_reconstructed.dat`, `gauge_forces.png`,
-`specimen_reconstruction.png`, `bar_identification_tension.png`. `clean.sh` also removes the superseded
+`specimen_reconstruction.png`, `bar_identification_tension.png`,
+`lagrange_diagram.png`. `clean.sh` also removes the superseded
 `eps.npy` / `force.npy` / `meta.npz` / `meta.npy` if an older run left them.
 
 ## Dependencies

@@ -2,8 +2,8 @@
 Selective recording of simulator output.
 
 The simulators used to keep strain and force for EVERY element at EVERY
-timestep. For the tension case that is a 6030 x 36861 pair of float64 arrays --
-3.6 GB in memory, 1.8 GB on disk -- to produce six gauge signals. This module
+timestep. For the tension case that is a 6030 x 23038 pair of float64 arrays --
+2.2 GB in memory, 1.1 GB on disk -- to produce six gauge signals. This module
 records only what the analysis scripts actually consume:
 
   * strain at each gauge element, one row per gauge per bar;
@@ -28,7 +28,8 @@ __all__ = ['GaugeRecorder']
 
 class GaugeRecorder:
     def __init__(self, specimen_indices, dx, total_length, gauge_distances,
-                 n_steps, n_elements, record_full_field=False):
+                 n_steps, n_elements, record_full_field=False,
+                 bar_indices=None):
         """
         Parameters
         ----------
@@ -46,6 +47,13 @@ class GaugeRecorder:
         record_full_field : bool
             Also keep the every-element/every-timestep arrays (the old
             behaviour). Expensive; see config.toml.
+        bar_indices : (input_elements, output_elements), optional
+            ELEMENT indices of the two bars, used to record how far the UNIFORM
+            bar material actually extends from each interface. That is not the
+            same as the distance to the far end: the SHTB carries a 20 mm steel
+            anvil beyond the end of the input bar, and a reconstruction that
+            runs into it is extrapolating through the wrong wave speed. Omit
+            on a model whose bars run all the way to their far ends.
         """
         spec = np.asarray(specimen_indices)
 
@@ -61,6 +69,26 @@ class GaugeRecorder:
         # hardcoded total length the analysis scripts used to carry.
         self.L_free_in = self.X_IN
         self.L_free_out = total_length - self.X_OUT
+
+        # How far the UNIFORM bar reaches from each interface, which is what
+        # bounds a wave reconstruction. Equal to L_free_* unless something of
+        # another material sits between the bar and its far end -- the SHTB's
+        # steel anvil does, so L_bar_in is 3000 mm against L_free_in's 3020.
+        # separate() assumes one wave speed all the way from the gauge to the
+        # plane it reconstructs at, so past L_bar_* the result is extrapolation
+        # through the wrong material and must be masked, not plotted.
+        # Clamped to the far end: simulate_compression.py builds these as NODE
+        # indices and uses them on element arrays (see its own comment), so its
+        # out_e.max() runs one past the last element and would put the bar
+        # beyond the end of the model. A bar can never be longer than the
+        # distance to its own far end, so clamping is right regardless.
+        if bar_indices is None:
+            self.L_bar_in, self.L_bar_out = self.L_free_in, self.L_free_out
+        else:
+            in_e, out_e = (np.asarray(a) for a in bar_indices)
+            self.L_bar_in = min(self.X_IN - int(in_e.min()) * dx, self.L_free_in)
+            self.L_bar_out = min((int(out_e.max()) + 1) * dx - self.X_OUT,
+                                 self.L_free_out)
 
         self.dx = dx
         self.gauge_distances = list(gauge_distances)
@@ -129,7 +157,8 @@ class GaugeRecorder:
                    force_iface_out=self.force_iface[1],
                    iface_in=self.iface_in, iface_out=self.iface_out,
                    X_IN=self.X_IN, X_OUT=self.X_OUT,
-                   L_free_in=self.L_free_in, L_free_out=self.L_free_out)
+                   L_free_in=self.L_free_in, L_free_out=self.L_free_out,
+                   L_bar_in=self.L_bar_in, L_bar_out=self.L_bar_out)
         if self.record_full_field:
             out['eps_full'] = self.eps_full.astype(np.float32)
             out['force_full'] = self.force_full.astype(np.float32)

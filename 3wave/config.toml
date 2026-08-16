@@ -37,7 +37,9 @@ dx = 1.0                # element length [mm]
 
 # Opt-in: also store strain and force for EVERY element at EVERY timestep.
 # This is what the code used to do unconditionally, and it is expensive --
-# the tension case is 6030 x 36861, i.e. 3.6 GB in memory and 1.8 GB on disk.
+# the tension case is 6030 x 23038 at the shipped courant = 0.8, i.e. 2.2 GB in
+# memory and 1.1 GB on disk. (The 6030 x 36861 / 3.6 GB / 1.8 GB quoted here
+# until 2026-08-16 was measured back when courant was 0.5.)
 # Leave false unless you need the full field (animation, Lagrange diagram).
 record_full_field = false
 
@@ -144,21 +146,28 @@ gauges = [130.0, 530.0]           # the layout being calibrated. The identify
 # the geometry only up to one overall scale and exactly one length must come
 # from outside. This is it: gauge -> far free end, by tape.
 #
-# Omit xi_ref entirely and identify_bar_tension.py falls back to the model's own
-# geometry, which a simulation can supply and a rig cannot -- that is the
+# It is a DISTANCE in mm, the same family as the dump's L_free_in / L_free_out
+# but measured to a gauge rather than to a bar face. It has nothing to do with
+# the complex wavenumber xi = (w - i eta)/c_p of the separation theory, which is
+# a different quantity in different units -- these keys were called xi_ref* up
+# to 2026-08-16 and that collision is why they are not any more.
+#
+# Omit L_free_ref entirely and identify_bar_tension.py falls back to the model's
+# own geometry, which a simulation can supply and a rig cannot -- that is the
 # self-check mode, not the instrument. Override either value on the command line
-# (--xi-ref / --xi-ref-tol) to sweep the sensitivity without editing this file.
+# (--l-free-ref / --l-free-ref-tol) to sweep sensitivity without editing this
+# file.
 #
 # NOTE this value depends on the gauge layout and the bar lengths above. Change
 # either and it goes stale; the script cross-checks it against the model
-# geometry and warns when the two disagree by more than xi_ref_tol.
-xi_ref = 3679.5                   # in-1 -> far free end [mm]
-xi_ref_gauge = "in-1"             # which gauge the tape reached. Any gauge will
+# geometry and warns when the two disagree by more than L_free_ref_tol.
+L_free_ref = 3679.5               # in-1 -> far free end [mm]
+L_free_ref_gauge = "in-1"         # which gauge the tape reached. Any gauge will
                                   # do -- the script refers it to whichever one
                                   # the record picks as reference -- but the
                                   # longest baseline gives the best leverage.
                                   # Omit to mean "whichever is the reference".
-xi_ref_tol = 2.0                  # what the tape is actually good to [mm].
+L_free_ref_tol = 2.0              # what the tape is actually good to [mm].
                                   # Propagated to every result; it dominates.
 
 # Free-end null test. The far end of the output bar is a free surface, so the
