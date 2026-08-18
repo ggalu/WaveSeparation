@@ -18,7 +18,7 @@ from dump import load_dump
 from wsep import wave_separation
 
 d = load_dump()
-E, A, c0, dt, t = d['E'], d['A'], d['c0'], d['dt'], d['t']
+dt, t = d['dt'], d['t']
 NFFT = 1 << 18
 fmax = 1.0 / dt
 
@@ -44,9 +44,14 @@ print(f"loading = {d['loading']}, record length {T:.3f} ms "
       f"(eta above {30/T:.1f} /ms overflows)")
 print(f"{'bar':5s} {'eta':>7s}  {'rel L2 err vs true interface force':>34s}"
       "   peak-normalised")
-for bar, sig, pos, truth in (
-        ('in', d['eps_in'], d['pos_in'], d['force_iface_in']),
-        ('out', d['eps_out'], d['pos_out'], d['force_iface_out'])):
+# Each bar carries its own E, A and c0 -- on the compression case they are an
+# aluminium and a polycarbonate bar, and using one bar's numbers on the other
+# would swamp whatever the separation itself is doing.
+for bar, sig, pos, truth, E, A, c0 in (
+        ('in', d['eps_in'], d['pos_in'], d['force_iface_in'],
+         d['E_in'], d['A_in'], d['c0_in']),
+        ('out', d['eps_out'], d['pos_out'], d['force_iface_out'],
+         d['E_out'], d['A_out'], d['c0_out'])):
     for eta in ETA_SWEEP:
         a0, b0 = wave_separation(t, *sig, *pos, c0, eta, NFFT, fmax)
         rec = E * A * (a0 + b0)

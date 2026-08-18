@@ -29,7 +29,7 @@ from dump import load_dump
 # --- load ------------------------------------------------------------------
 # see dump.py for the full definition of each entry
 d = load_dump()
-E, A, c0, t = d['E'], d['A'], d['c0'], d['t']
+t = d['t']
 A_SPEC, LOADING = d['A_specimen'], d['loading']
 
 # Sign conventions and labels follow the loading sense recorded in the dump.
@@ -41,8 +41,10 @@ print(f'dump is {"TENSION (SHTB)" if TENSION else "COMPRESSION (direct impact)"}
 # A strain gauge measures strain, so the force it reports is E*A*eps. This is
 # deliberately NOT the recorded element force: with damping != 0 that also
 # carries the artificial-viscosity term, which no real gauge would see.
-gauge_forces = {'in': SIGN * E * A * d['eps_in'],
-                'out': SIGN * E * A * d['eps_out']}
+# E*A per bar: the compression case's output bar is polycarbonate, whose E*A is
+# 0.03x the input bar's, so one shared factor would misreport its force by 30x.
+gauge_forces = {'in': SIGN * d['E_in'] * d['A_in'] * d['eps_in'],
+                'out': SIGN * d['E_out'] * d['A_out'] * d['eps_out']}
 gauge_pos = {'in': d['pos_in'], 'out': d['pos_out']}
 
 # Force carried by the specimen, as the simulator measured it.
@@ -65,7 +67,11 @@ for ax, bar, label in zip(axes, ('in', 'out'), ('Input bar', 'Output bar')):
     # round trip to the bar's far end: the reflection arrives back here.
     # Geometrically the same in both simulators; only the boundary condition
     # there differs (a free end, or the struck anvil on the SHTB input bar).
+    # ... at that bar's OWN wave speed: on the compression case the
+    # polycarbonate output bar is 3.7x slower than the aluminium input bar, so
+    # one shared c0 would put this marker in the wrong place on one of them.
     L_free = d['L_free_in'] if bar == 'in' else d['L_free_out']
+    c0 = d['c0_in'] if bar == 'in' else d['c0_out']
     t_end = 2 * L_free / c0
     ax.axvline(t_end, color=INK_MUTED, lw=1, ls=':', alpha=.7)
     ax.annotate('far-end reflection\nreaches interface', xy=(t_end, ax.get_ylim()[1]),
@@ -93,8 +99,10 @@ print('wrote gauge_forces.png')
 
 # --- when does overlap actually begin at each gauge? ----------------------
 print('\noverlap onset = arrival of the far-end reflection at the gauge')
-for bar, Lfree in (('in', d['L_free_in']), ('out', d['L_free_out'])):
-    print(f'  {bar} bar (far end {Lfree:.0f} mm from interface):')
+for bar, Lfree, c0 in (('in', d['L_free_in'], d['c0_in']),
+                       ('out', d['L_free_out'], d['c0_out'])):
+    print(f'  {bar} bar (far end {Lfree:.0f} mm from interface, '
+          f'c0 = {c0:.0f} mm/ms):')
     for exact in gauge_pos[bar]:
         print(f'    gauge @ {exact:6.1f} mm : outgoing {exact/c0:.3f} ms, '
               f'reflected {(2*Lfree - exact)/c0:.3f} ms, '

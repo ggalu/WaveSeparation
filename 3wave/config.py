@@ -5,10 +5,17 @@ the analysis scripts.
     from config import load
     cfg = load('tension')
 
-    cfg['bar']['E']          # material and geometry, as written in the file
+    cfg['input_bar']['E']    # material and geometry, as written in the file
     cfg['gauges']            # gauge distances from the interface [mm]
     cfg['numerics']['dx']    # shared numerics, with any per-case override applied
     cfg['analysis']['eta']
+
+Every case carries TWO bar tables, [<case>.input_bar] and [<case>.output_bar],
+whether or not the two bars are the same. The compression case genuinely differs
+(aluminium 2000 mm against polycarbonate 1000 mm); the SHTB cases repeat
+themselves. That uniformity is deliberate -- dump.npz records E / A / rho / c0
+per bar, so nothing downstream has to ask whether a rig happens to be symmetric.
+bar_lengths() returns the pair without the caller reaching into either table.
 
 Nothing here computes derived quantities -- areas, wave speeds and element
 indices are the simulators' business, because that is where the geometry lives.
@@ -20,13 +27,19 @@ tomllib is in the standard library from Python 3.11, so this adds no dependency.
 import os
 import tomllib
 
-__all__ = ['load', 'CASES', 'DEFAULT_PATH']
+__all__ = ['load', 'bar_lengths', 'CASES', 'BAR_TABLES', 'DEFAULT_PATH']
 
-CASES = ('compression', 'tension', 'calibration_tension')
+CASES = ('compression', 'calibration_compression',
+         'tension', 'calibration_tension')
 
 # Cases that run through simulate_tension.py and therefore need a striker and
 # an anvil table as well as a bar and a specimen.
 _SHTB_CASES = ('tension', 'calibration_tension')
+
+# The bar tables every case carries, and the key in each that holds its length.
+# Everything needing a bar length goes through bar_lengths() rather than
+# reaching into a table by name.
+BAR_TABLES = (('input_bar', 'L_input'), ('output_bar', 'L_output'))
 
 DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             'config.toml')
@@ -73,6 +86,17 @@ def load(case, path=DEFAULT_PATH):
     return cfg
 
 
+def bar_lengths(cfg):
+    """
+    (L_input, L_output) for a loaded case, whichever bar layout it uses.
+
+    Saves every caller from reaching into [<case>.input_bar]['L_input'] and its
+    output-bar twin by hand, and from caring that the two lengths live in
+    different tables.
+    """
+    return tuple(cfg[table][key] for table, key in BAR_TABLES)
+
+
 def _validate(cfg, case, path):
     """Catch the mistakes that would otherwise fail silently or far downstream."""
     where = f'{path} [{case}]'
@@ -80,7 +104,7 @@ def _validate(cfg, case, path):
     if cfg.get('loading') not in ('compression', 'tension'):
         raise ValueError(f"{where}: loading must be 'compression' or 'tension'")
 
-    for key in ('bar', 'specimen'):
+    for key in [table for table, _ in BAR_TABLES] + ['specimen']:
         if key not in cfg:
             raise KeyError(f'{where}: missing [{case}.{key}] table')
     if case in _SHTB_CASES:
@@ -113,8 +137,8 @@ def _validate(cfg, case, path):
 
     # A gauge further from the interface than the bar is long would silently be
     # clamped to some element in the wrong region, or in the striker's range.
-    for side, length in (('input', cfg['bar']['L_input']),
-                         ('output', cfg['bar']['L_output'])):
+    L_input, L_output = bar_lengths(cfg)
+    for side, length in (('input', L_input), ('output', L_output)):
         if max(gauges) >= length:
             raise ValueError(
                 f'{where}: gauge at {max(gauges)} mm does not fit on the '

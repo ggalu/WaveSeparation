@@ -83,7 +83,7 @@ class SimulateSHTB:
     def __init__(self, cfg=None):
         cfg = _config.load('tension') if cfg is None else cfg
         self.cfg = cfg
-        bar, spec = cfg['bar'], cfg['specimen']
+        in_bar, out_bar, spec = cfg['input_bar'], cfg['output_bar'], cfg['specimen']
         strk, anv, num = cfg['striker'], cfg['anvil'], cfg['numerics']
 
         # specimen properties (tension)
@@ -97,13 +97,18 @@ class SimulateSHTB:
         self.failure_strain = spec.get('failure_strain')
 
         # --- materials -----------------------------------------------------
-        self.E_bar, self.rho_bar = bar['E'], bar['rho']          # 7075-T6 Al
+        # The two bars come from separate tables even though a conventional SHTB
+        # uses the same stock for both -- see config.toml. E_bar / rho_bar keep
+        # their names as the INPUT bar, which is what this model's striker,
+        # anvil and timestep all hang off.
+        self.E_bar, self.rho_bar = in_bar['E'], in_bar['rho']        # 7075-T6 Al
+        self.E_outbar, self.rho_outbar = out_bar['E'], out_bar['rho']
         self.E_pom, self.rho_pom = strk['E'], strk['rho']        # POM striker
         self.E_anvil, self.rho_anvil = anv['E'], anv['rho']      # steel anvil
 
         # --- geometry ------------------------------------------------------
-        self.L_inputbar = bar['L_input']
-        self.L_outputbar = bar['L_output']
+        self.L_inputbar = in_bar['L_input']
+        self.L_outputbar = out_bar['L_output']
         self.L_specimen = spec['length']
         self.L_anvil = anv['length']
         # Striker length sets the pulse length (2*L_striker/c_striker) and,
@@ -113,11 +118,13 @@ class SimulateSHTB:
         # applies: POM is 3.5x slower, so the same 800 mm gives a 1097 us pulse
         # instead of 314 us. Re-measure before quoting numbers.
         self.L_striker = strk['length']
-        self.diameter_bar = bar['diameter']
+        self.diameter_bar = in_bar['diameter']
+        self.diameter_outbar = out_bar['diameter']
         self.striker_id = strk['inner_diameter']
         self.striker_od = strk['outer_diameter']
         self.diameter_anvil = anv['diameter']
         self.A_bar = 0.25 * np.pi * self.diameter_bar**2
+        self.A_outbar = 0.25 * np.pi * self.diameter_outbar**2
         self.A_striker = 0.25 * np.pi * (self.striker_od**2 - self.striker_id**2)
         self.A_anvil = 0.25 * np.pi * self.diameter_anvil**2
 
@@ -183,7 +190,9 @@ class SimulateSHTB:
                 (self.anvilIndices, (self.E_anvil, self.A_anvil, self.rho_anvil)),
                 (self.specimenIndices, (self.specimen_E,
                                         self.specimen_cross_section_area,
-                                        self.rho_specimen))):
+                                        self.rho_specimen)),
+                (self.outputBarIndices, (self.E_outbar, self.A_outbar,
+                                         self.rho_outbar))):
             self.E_elem[idx], self.A_elem[idx], self.rho_elem[idx] = Ee, Ae, re
 
         # artificial viscosity acts through the local impedance rho*c, and
@@ -231,11 +240,16 @@ class SimulateSHTB:
         # meta.npz and what the reduction uses. The striker and anvil have their
         # own, and the fastest of the three sets the stable timestep.
         self.c0 = np.sqrt(self.E_bar / self.rho_bar)
+        self.c_outbar = np.sqrt(self.E_outbar / self.rho_outbar)
         self.c_striker = np.sqrt(self.E_pom / self.rho_pom)
         self.c_anvil = np.sqrt(self.E_anvil / self.rho_anvil)
         self.pulse_duration = 2 * self.L_striker / self.c_striker
-        c_max = max(self.c0, self.c_striker, self.c_anvil)
-        endTime = self.N_cycles * 2 * min(self.L_inputbar, self.L_outputbar) / self.c0
+        c_max = max(self.c0, self.c_outbar, self.c_striker, self.c_anvil)
+        # Round trips of whichever bar is shorter IN TIME, each at its own wave
+        # speed. With the symmetric bars of a normal SHTB this is the old
+        # min(L_in, L_out)*2/c0.
+        endTime = self.N_cycles * 2 * min(self.L_inputbar / self.c0,
+                                          self.L_outputbar / self.c_outbar)
         self.dt = self.courant * self.dx0 / c_max
         self.num_timesteps = int(endTime / self.dt)
         self.T = np.arange(self.num_timesteps) * self.dt

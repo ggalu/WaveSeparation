@@ -41,6 +41,8 @@ GENERATED=(
     "gauge_forces.png"
     # figure written by identify_bar_tension.py
     "bar_identification_tension.png"
+    # figure written by identify_bar_compression.py
+    "bar_identification_compression.png"
     # figure written by lagrange_diagram.py
     "lagrange_diagram.png"
     # legacy outputs of the unmodified simulate_compression.py, in case an older copy is run

@@ -34,7 +34,11 @@ class GaugeRecorder:
         Parameters
         ----------
         specimen_indices : array of int
-            ELEMENT indices occupied by the specimen.
+            ELEMENT indices occupied by the specimen. MAY BE EMPTY: a
+            calibration shot on a direct-impact rig has no specimen at all, the
+            two bar faces touching directly. The interface elements are then
+            taken from bar_indices instead, and the specimen ground-truth rows
+            are recorded as zero because there is nothing to record.
         dx : float
             Element length.
         total_length : float
@@ -55,15 +59,29 @@ class GaugeRecorder:
             runs into it is extrapolating through the wrong wave speed. Omit
             on a model whose bars run all the way to their far ends.
         """
-        spec = np.asarray(specimen_indices)
+        spec = np.asarray(specimen_indices, dtype=int)
+        self.no_specimen = spec.size == 0
+        if self.no_specimen and bar_indices is None:
+            raise ValueError('an empty specimen needs bar_indices: with no '
+                             'specimen elements there is nothing else to take '
+                             'the interface elements from')
 
         # Interface elements and the planes they bound. Derived from the
-        # specimen indices rather than assumed, because simulate_compression.py's regions
-        # are built as node indices and used on element arrays.
-        self.iface_in = int(spec.min()) - 1      # last input-bar element
-        self.iface_out = int(spec.max()) + 1     # first output-bar element
-        self.X_IN = (self.iface_in + 1) * dx     # input bar face
-        self.X_OUT = self.iface_out * dx         # output bar face
+        # specimen indices rather than assumed, so that neither simulator has to
+        # agree with this module on how its regions were built. With no specimen
+        # the two bars meet directly, so the bounding elements are the last of
+        # one bar and the first of the other, and the two planes COINCIDE on the
+        # contact plane -- X_IN == X_OUT, and every gauge distance on either bar
+        # is measured from the same place.
+        if self.no_specimen:
+            _in_e, _out_e = (np.asarray(a) for a in bar_indices)
+            self.iface_in = int(_in_e.max())
+            self.iface_out = int(_out_e.min())
+        else:
+            self.iface_in = int(spec.min()) - 1   # last input-bar element
+            self.iface_out = int(spec.max()) + 1  # first output-bar element
+        self.X_IN = (self.iface_in + 1) * dx      # input bar face
+        self.X_OUT = self.iface_out * dx          # output bar face
 
         # Distance from each interface to that bar's far end. Kills the
         # hardcoded total length the analysis scripts used to carry.
@@ -77,11 +95,12 @@ class GaugeRecorder:
         # separate() assumes one wave speed all the way from the gauge to the
         # plane it reconstructs at, so past L_bar_* the result is extrapolation
         # through the wrong material and must be masked, not plotted.
-        # Clamped to the far end: simulate_compression.py builds these as NODE
-        # indices and uses them on element arrays (see its own comment), so its
-        # out_e.max() runs one past the last element and would put the bar
-        # beyond the end of the model. A bar can never be longer than the
-        # distance to its own far end, so clamping is right regardless.
+        # Clamped to the far end. Both simulators now index by element centre,
+        # so the clamp is a no-op for them -- it was needed while
+        # simulate_compression.py built these as NODE indices and used them on
+        # element arrays, which ran out_e.max() one past the last element and
+        # put the bar beyond the end of the model. Kept because a bar can never
+        # be longer than the distance to its own far end, whatever feeds this.
         if bar_indices is None:
             self.L_bar_in, self.L_bar_out = self.L_free_in, self.L_free_out
         else:
@@ -143,8 +162,11 @@ class GaugeRecorder:
         self.eps_in[:, step] = eps[self.elem_in]
         self.eps_out[:, step] = eps[self.elem_out]
         self.force_iface[:, step] = element_forces[self._iface]
-        self.spec_strain[step] = eps[self._spec].mean()
-        self.spec_force[step] = element_forces[self._spec].mean()
+        # With no specimen these two stay zero: there is no specimen to measure,
+        # and a mean over an empty selection is not a number.
+        if not self.no_specimen:
+            self.spec_strain[step] = eps[self._spec].mean()
+            self.spec_force[step] = element_forces[self._spec].mean()
         if self.record_full_field:
             self.eps_full[:, step] = eps
             self.force_full[:, step] = element_forces

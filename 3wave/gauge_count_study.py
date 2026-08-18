@@ -15,9 +15,17 @@ from wave_separation import (separate, backpropagate, bar_interface,
                              specimen_response, single_wave_window)
 
 d = load_dump()
-E, A, c0, dt, t = d['E'], d['A'], d['c0'], d['dt'], d['t']
+# Per bar -- the compression case is aluminium against polycarbonate.
+E_IN, A_IN, C_IN = d['E_in'], d['A_in'], d['c0_in']
+E_OUT, A_OUT, C_OUT = d['E_out'], d['A_out'], d['c0_out']
+dt, t = d['dt'], d['t']
 L_SPEC, A_SPEC = d['L_specimen'], d['A_specimen']
 LOADING, ETA = d['loading'], d['eta']
+
+if L_SPEC == 0.0:
+    raise SystemExit('this dump has no specimen (a calibration shot); there is no\n'
+                     'specimen response to compare gauge layouts against.')
+
 L_IN, L_OUT = d['L_free_in'], d['L_free_out']
 N_G = d['eps_in'].shape[0]
 
@@ -33,6 +41,7 @@ def waves(bar, idx):
     """Separate (or backpropagate) using the gauges at positions `idx`."""
     sig = d[f'eps_{bar}'][list(idx)]
     pos = d[f'pos_{bar}'][list(idx)]
+    c0 = C_IN if bar == 'in' else C_OUT
     if len(idx) == 1:
         # direct impact: the only wave present travels AWAY from the specimen
         return backpropagate(t, sig[0], pos[0], c0, eta=ETA, direction='plus')
@@ -58,9 +67,9 @@ LAYOUTS = list(dict.fromkeys(LAYOUTS))
 print(f'loading = {LOADING}, eta = {ETA} /ms, '
       f'gauges at {[f"{p:.1f}" for p in d["pos_in"]]} mm')
 print(f'single-wave window ends at: input bar '
-      f'{single_wave_window(L_IN, d["pos_in"][0], c0):.3f} ms, '
-      f'output bar {single_wave_window(L_OUT, d["pos_out"][0], c0):.3f} ms')
-print(f'loading event ends at ~{2*L_IN/c0:.3f} ms  '
+      f'{single_wave_window(L_IN, d["pos_in"][0], C_IN):.3f} ms, '
+      f'output bar {single_wave_window(L_OUT, d["pos_out"][0], C_OUT):.3f} ms')
+print(f'loading event ends at ~{2*L_IN/C_IN:.3f} ms  '
       f'(peak strain {eps_true.max():.3f})')
 if not SINGLE_GAUGE_OK:
     print('\nNOTE: this is a TENSION dump. Single-gauge rows are skipped -- '
@@ -80,8 +89,10 @@ for din, dout in LAYOUTS:
         note = f'   <- gauge at {d["pos_in"][-1]:.0f} mm'
     p_in, m_in = waves('in', din)
     p_out, m_out = waves('out', dout)
-    F_in, v_in = bar_interface(p_in, m_in, E, A, c0, outward=-1, v0=d['v0_in'])
-    F_out, v_out = bar_interface(p_out, m_out, E, A, c0, outward=+1, v0=d['v0_out'])
+    F_in, v_in = bar_interface(p_in, m_in, E_IN, A_IN, C_IN,
+                               outward=-1, v0=d['v0_in'])
+    F_out, v_out = bar_interface(p_out, m_out, E_OUT, A_OUT, C_OUT,
+                                 outward=+1, v0=d['v0_out'])
     r = specimen_response(t, F_in, v_in, F_out, v_out, L_SPEC, A_SPEC,
                           loading=LOADING)
     print(f'{len(din):>7d} ga {len(dout):>7d} ga   {rel(r["stress"], sig_true):11.3e} '

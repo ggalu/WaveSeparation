@@ -15,10 +15,22 @@ repeated here; this file is only for what those do not record.
 - **`null_tol = 2.5e-3` is a coarse screen, not a precision check.** It separates
   a good calibration (1.21e-3) from a 0.9-ρ coupler (3.51e-3) by only 2.9×.
   A FAIL is conclusive; a PASS is weak evidence.
-- **The compression case is out of scope** for the calibration work.
-  `identify_bar_tension.py` hardcodes `config.load('calibration_tension')`. If a
-  `calibration_compression` counterpart is ever wanted, the case name has to
-  become a CLI argument too.
+- ~~**The compression case is out of scope** for the calibration work.~~ **Done
+  2026-08-18**, as a separate script rather than a case flag on the existing
+  one. `identify_bar_compression.py` shares only the three signal-processing
+  primitives; the method genuinely differs. Both far ends of a direct-impact rig
+  are free, so each bar rings on its own round trip `2L/c`, that round trip is
+  in the record, and the length closing the scale is the bar's own length rather
+  than a gauge-to-free-end distance. Two bars, two speeds, two independent
+  identifications — and the tape lands on the positions as a RELATIVE band,
+  which the tension rig cannot manage. See "Calibrating a direct-impact bar" in
+  `README.md`.
+- **`specimen.length = 0` is now literal**, not a stand-in. The compression
+  simulator meshes no element between the bars, `recording.py` takes the
+  interface elements from the bar indices instead, `X_IN == X_OUT` on the
+  contact plane, and the unilateral condition goes on ONE face rather than two —
+  clipping both would stop the output bar carrying the tensile wave its own free
+  end sends back, 1 mm inside the bar and for no physical reason.
 - **No loader for real experimental data yet**, by explicit decision. `--l-free-ref`
   is the conceptually load-bearing half of rig readiness; the other half is a
   loader that builds the dump dict from scope traces, since `eps_in`/`dt`/`N`
@@ -50,6 +62,43 @@ repeated here; this file is only for what those do not record.
 4. **The `'  merged'` label in the per-gauge edge table is effectively dead
    code.** It requires all four candidates to fall within `TOL` of `P`. What
    actually rescues `out-0` is the `Q` outlier test, not the NaN path.
+
+5. **TODO — port two fixes from `identify_bar_compression.py` back into
+   `identify_bar_tension.py`.** Both were forced by the compression rig and both
+   are strictly better than what the tension script does; neither has been
+   applied there, so the tension results above are still the old behaviour.
+
+   a. **Measured rise time instead of `EDGE_MS`.** This closes thread 3.
+      `_rise_time(g, dt)` in `identify_bar_compression.py` takes the 10–90 %
+      rise of the leading edge and the template is sized at `3 x rise`. The
+      compression script had no choice — its polycarbonate edges are 5× broader
+      than its aluminium ones, so one constant could not serve both bars. The
+      tension script's `EDGE_MS = 0.12` is tuned to this model's 59 µs rise and
+      is the constant most likely to bite on a real bar, where
+      Pochhammer–Chree dispersion widens edges. `TOL = 0.6 * EDGE_MS` follows
+      the template width and needs no separate thought.
+
+   b. **Pick the STRONGEST candidate edge, not the EARLIEST.** The tension
+      script's `candidates()` returns `(delay, value)` pairs and then takes
+      `pick[0]`, the earliest surviving delay. A lumped-chain wavefront rings,
+      so the cross-correlation carries sidelobes a few microseconds AHEAD of the
+      true peak; on the compression record that put `f2` about 1.4 µs early and
+      landed positions **4 mm out**, with every printed number still looking
+      entirely plausible. `identify_bar_compression.py` uses
+      `max(keep, key=lambda p: p[1])` instead. The tension script gets away with
+      the earliest rule today only because its two features are far apart and
+      its POM-driven edges are smooth — that is luck, not design.
+
+   Porting is not a copy-paste: the tension script identifies ONE uniform
+   assembly with a reference gauge and lags, so there is a single template and a
+   single rise to measure, not one per bar. Re-run the "What comes out" table in
+   `README.md` afterwards — the numbers there will move, and they are measured
+   values, so regenerate them rather than editing them by hand.
+6. **The polycarbonate bar identifies 6× worse than the aluminium one**
+   (`c` −3.5e-03 against −5.5e-04), and it is the TIMESTEP, not the method:
+   `dt` follows the fastest material present, so the polycarbonate elements run
+   at an effective Courant number of 0.22 and disperse. A per-material timestep,
+   or simply a finer mesh in the slow bar, would fix it. Not attempted.
 
 ## Traps worth not rediscovering
 

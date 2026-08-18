@@ -90,7 +90,12 @@ from dump import load_dump
 from wave_separation import separate_field
 
 d = load_dump()
-E, A, c0, dt, t = d['E'], d['A'], d['c0'], d['dt'], d['t']
+# Per bar: the two are separated independently and, on the compression case,
+# are not even the same material. Every call below takes the c0 of whichever
+# bar it is reconstructing in.
+E_IN, A_IN, C_IN = d['E_in'], d['A_in'], d['c0_in']
+E_OUT, A_OUT, C_OUT = d['E_out'], d['A_out'], d['c0_out']
+dt, t = d['dt'], d['t']
 dx, N, ETA, LOADING = d['dx'], d['N'], d['eta'], d['loading']
 X_IN, X_OUT = d['X_IN'], d['X_OUT']
 L_BAR_IN, L_BAR_OUT = d['L_bar_in'], d['L_bar_out']
@@ -110,8 +115,11 @@ print(__doc__.split('---')[0].strip())
 print(f'\nrecord     : {N} samples at {dt*1e3:.4f} us  ({t[-1]:.3f} ms), '
       f'{LOADING} positive')
 print(f'assembly   : input bar {L_BAR_IN:.0f} mm | specimen '
-      f'{d["L_specimen"]:.0f} mm | output bar {L_BAR_OUT:.0f} mm, '
-      f'c0 = {c0:.1f} mm/ms')
+      f'{d["L_specimen"]:.0f} mm | output bar {L_BAR_OUT:.0f} mm')
+print(f'wave speed : input {C_IN:.1f} mm/ms, output {C_OUT:.1f} mm/ms'
+      + ('' if C_IN == C_OUT else
+         f'   (the bars differ -- characteristics have different slopes '
+         f'on the two sides)'))
 if L_BAR_IN < L_FREE_IN or L_BAR_OUT < L_FREE_OUT:
     print(f'             non-bar material beyond the input bar '
           f'({L_FREE_IN - L_BAR_IN:.0f} mm) and the output bar '
@@ -151,8 +159,8 @@ eps_p = np.full((len(X), n_rows), np.nan)
 eps_m = np.full((len(X), n_rows), np.nan)
 t_img = None
 
-for mask, sig, pos in ((in_bar, d['eps_in'], d['pos_in']),
-                       (out_bar, d['eps_out'], d['pos_out'])):
+for mask, sig, pos, c0 in ((in_bar, d['eps_in'], d['pos_in'], C_IN),
+                           (out_bar, d['eps_out'], d['pos_out'], C_OUT)):
     if not mask.any():
         continue
     p, m, t_img = separate_field(
@@ -172,8 +180,9 @@ print('\n--- checks '
 #     the only stations where the field is constrained by data.
 print('reconstruction vs the RECORDED strain, at the gauges:')
 worst = 0.0
-for bar, sig, pos, plane, sgn in (('in', d['eps_in'], d['pos_in'], X_IN, -1),
-                                  ('out', d['eps_out'], d['pos_out'], X_OUT, +1)):
+for bar, sig, pos, plane, sgn, c0 in (
+        ('in', d['eps_in'], d['pos_in'], X_IN, -1, C_IN),
+        ('out', d['eps_out'], d['pos_out'], X_OUT, +1, C_OUT)):
     sigs = [sig[k] for k in range(sig.shape[0])]
     p, m, _ = separate_field(t, sigs, list(pos), c0=c0, eta=ETA,
                              x=list(pos), decimate=1, chunk=ARGS.chunk)
@@ -191,12 +200,12 @@ if worst > 1e-10:
 #     local->global mapping, which no other check here can see.
 sigs = [d['eps_in'][k] for k in range(n_in)]
 ks = (1, 13, 500)
-p_s, _, _ = separate_field(t, sigs, list(d['pos_in']), c0=c0, eta=ETA,
-                           x=[0.0] + [c0 * dt * k for k in ks], decimate=1)
+p_s, _, _ = separate_field(t, sigs, list(d['pos_in']), c0=C_IN, eta=ETA,
+                           x=[0.0] + [C_IN * dt * k for k in ks], decimate=1)
 shift = max(np.abs(p_s[j, k:] - p_s[0, :-k]).max() / np.abs(p_s[0]).max()
             for j, k in enumerate(ks, start=1))
 print(f'\npropagation is an exact time shift          : {shift:.1e} '
-      f'(over {ks[-1]} samples = {c0*dt*ks[-1]:.0f} mm)')
+      f'(over {ks[-1]} samples = {C_IN*dt*ks[-1]:.0f} mm)')
 if shift > 1e-11:
     raise SystemExit('propagation is not a pure shift; check the sign of xi')
 
@@ -210,9 +219,9 @@ print(f'{"bar":>5} {"far end":>10} {"at the end":>12} {"10 mm in":>10} '
 # Whether a bar's far end is a free surface is geometry, not a constant: the
 # SHTB's input bar ends on the anvil, but the compression bar's ends free. A
 # bar that reaches its own far end has nothing beyond it to reflect off.
-for bar, sig, pos, L, L_free in (
-        ('in', d['eps_in'], d['pos_in'], L_BAR_IN, L_FREE_IN),
-        ('out', d['eps_out'], d['pos_out'], L_BAR_OUT, L_FREE_OUT)):
+for bar, sig, pos, L, L_free, c0 in (
+        ('in', d['eps_in'], d['pos_in'], L_BAR_IN, L_FREE_IN, C_IN),
+        ('out', d['eps_out'], d['pos_out'], L_BAR_OUT, L_FREE_OUT, C_OUT)):
     sigs = [sig[k] for k in range(sig.shape[0])]
     p, m, _ = separate_field(t, sigs, list(pos), c0=c0, eta=ETA,
                              x=[L, L - 10.0], decimate=1, chunk=ARGS.chunk)
@@ -229,8 +238,10 @@ print('   truncation, so the same good calibration reads ~200x worse there.')
 
 # (4) tie to the quantity sep_test.py already validates against the simulator.
 print('\ninterface force E*A*(eps+ + eps-) vs the simulator\'s own:')
-for bar, sig, pos, truth in (('in', d['eps_in'], d['pos_in'], d['force_iface_in']),
-                             ('out', d['eps_out'], d['pos_out'], d['force_iface_out'])):
+for bar, sig, pos, truth, E, A, c0 in (
+        ('in', d['eps_in'], d['pos_in'], d['force_iface_in'], E_IN, A_IN, C_IN),
+        ('out', d['eps_out'], d['pos_out'], d['force_iface_out'],
+         E_OUT, A_OUT, C_OUT)):
     sigs = [sig[k] for k in range(sig.shape[0])]
     p, m, _ = separate_field(t, sigs, list(pos), c0=c0, eta=ETA, x=[0.0],
                              decimate=1, chunk=ARGS.chunk)
@@ -325,9 +336,11 @@ axes[2].annotate('gauges — the only x constrained by data',
 _x0 = X_OUT + 0.20 * L_BAR_OUT
 _dx_ref = 0.55 * L_BAR_OUT
 _t0 = t_img[0] + 0.04 * (t_img[-1] - t_img[0])
-axes[0].plot([_x0, _x0 + _dx_ref], [_t0, _t0 + _dx_ref / c0], color=INK,
+# C_OUT, not C_IN: the key is drawn in the OUTPUT bar, and on the compression
+# case that bar is polycarbonate, whose characteristics are 3.7x steeper.
+axes[0].plot([_x0, _x0 + _dx_ref], [_t0, _t0 + _dx_ref / C_OUT], color=INK,
              lw=1.3, alpha=.6, zorder=6)
-axes[0].annotate(f'a characteristic: slope 1/c₀ = {1000/c0:.3f} µs/mm',
+axes[0].annotate(f'output-bar characteristic: slope 1/c₀ = {1000/C_OUT:.3f} µs/mm',
                  (_x0, _t0), xytext=(3, -12), textcoords='offset points',
                  fontsize=8, color=MUTED, zorder=6)
 

@@ -2,16 +2,23 @@
 #
 # Units throughout: mm, ms, kg  =>  kN, GPa, and mm/ms (numerically m/s).
 #
-# Three cases are defined. They are independent -- different materials, different
+# Four cases are defined. They are independent -- different materials, different
 # geometry, and their own gauge locations. Pick one by running its driver:
 #
-#     python3 drive_compression.py         -> [compression], direct-impact bar
-#     python3 drive_tension.py             -> [tension], SHTB with a POM striker
-#     python3 drive_calibration_tension.py -> [calibration_tension], the SHTB
-#                                             bars bolted together, no specimen
+#   python3 drive_compression.py             -> [compression], direct-impact bar
+#   python3 drive_calibration_compression.py -> [calibration_compression], that
+#                                               rig's two bars struck face to
+#                                               face, NO specimen
+#   python3 drive_tension.py                 -> [tension], SHTB, POM striker
+#   python3 drive_calibration_tension.py     -> [calibration_tension], the SHTB
+#                                               bars bolted together, no specimen
 #
-# All three write the same dump.npz, so the last one run is what the analysis
+# All four write the same dump.npz, so the last one run is what the analysis
 # scripts see. Never run a simulate_*.py directly: it produces no dump.
+#
+# Every case carries [<case>.input_bar] and [<case>.output_bar], even where the
+# two bars are the same -- dump.npz records E / A / rho / c0 per bar, so nothing
+# downstream has to ask whether a given rig happens to be symmetric.
 
 # --------------------------------------------------------------------------
 # Numerics, shared by both cases. Either case may override any of these in its
@@ -60,22 +67,134 @@ eta = 1.0
 loading = "compression"
 gauges = [130.0, 530.0]           # gauge distance from the interface [mm]
 
-[compression.bar]
+# The two bars are separate tables because they are no longer the same bar.
+# Everything downstream that says "the bar" means the INPUT bar: the dump's
+# E / A / rho / c0 are written from [compression.input_bar].
+[compression.input_bar]           # aluminium
 E = 70.0
 rho = 2.7e-6
 diameter = 16.0
 L_input = 2000.0
-L_output = 2000.0
 initial_velocity = 10.0           # the input bar arrives at this speed
 
+# Polycarbonate output bar: the standard trick for a soft specimen. Its
+# impedance rho*c is 0.12x the aluminium's, so the transmitted signal is ~8x
+# larger for the same specimen force and does not disappear into the noise.
+# c = sqrt(E/rho) = 1384 mm/ms, a quarter of the aluminium's 5092.
+#
+# It is SHORT on purpose. A PC bar long enough to time-separate the pulses
+# would be absurd, so 1000 mm is what a real rig looks like -- and separating
+# the overlapped waves is what this code is for.
+[compression.output_bar]          # polycarbonate
+E = 2.3
+rho = 1.2e-6
+diameter = 16.0
+L_output = 1000.0
+
 [compression.specimen]
-diameter = 8.0
-length = 10.0
+diameter = 3.0
+length = 4.0
 E = 2.4
 JC_A = 0.06                       # Johnson-Cook A
 JC_B = 0.16                       # Johnson-Cook B
 JC_n = 0.3                        # Johnson-Cook n
 elastic_only = false              # true disables the specimen's plasticity
+
+# ==========================================================================
+# CALIBRATION (COMPRESSION): the two bars struck face to face, NO specimen.
+# Run through simulate_compression.py by drive_calibration_compression.py, and
+# analysed by identify_bar_compression.py -- see "Calibrating a direct-impact
+# bar" in README.md.
+#
+# The tension rig needs a threaded coupler to join its bars; this one needs
+# nothing. The input bar simply arrives at the output bar face and the two
+# touch, so `specimen.length = 0` is literal rather than a stand-in, and the
+# contact plane is a single unilateral face rather than the two a loose
+# specimen has.
+#
+# It is EASIER to read than the tension calibration, and for one reason: both
+# far ends are genuinely free. Each bar therefore rings on its own round trip
+# 2 L / c, that round trip appears directly in the record, and the length that
+# closes the scale is the BAR'S OWN LENGTH rather than a gauge-to-free-end
+# distance nobody can reach with a tape. One per bar, because the two bars are
+# different materials with different wave speeds and are acoustically
+# independent once they separate.
+# ==========================================================================
+[calibration_compression]
+loading = "compression"
+gauges = [130.0, 530.0]           # the layout being calibrated. The identify
+                                  # script is never told these and recovers them
+
+# THE two measured lengths, one per bar: each bar's struck face to its own free
+# end, which is just the bar's length. A strain record is invariant under
+# (all lengths, c) -> (lambda * lengths, lambda * c) SEPARATELY ON EACH BAR
+# here, so each bar needs exactly one length from outside and neither helps the
+# other.
+#
+# Compare the tension rig, which needs L_free_ref -- a gauge-to-free-end
+# distance, awkward because the gauge is a grid under a blob of adhesive. These
+# are bar lengths. You measure them once, with the bars on the bench, before
+# anything is glued to them.
+#
+# Omit both and identify_bar_compression.py falls back to the model's own
+# geometry, which a simulation can supply and a rig cannot -- that is the
+# self-check mode, not the instrument. Override on the command line with
+# --l-in-ref / --l-out-ref to sweep sensitivity without editing this file.
+L_free_in_ref = 2000.0            # input bar: struck face -> free end [mm]
+L_free_out_ref = 1000.0           # output bar: struck face -> free end [mm]
+L_free_ref_tol = 2.0              # what the tape is good to [mm], both bars
+
+# Free-end null test, as in [calibration_tension] -- but here it runs on BOTH
+# bars, because both far ends are free. See that case for why the window is not
+# optional.
+null_window = 0.75
+
+# ONE THRESHOLD PER BAR, and they are 10-40x looser than the tension rig's
+# 2.5e-3. That is not slack: it is where the floor actually is here. A direct
+# impact starts from a VELOCITY STEP, so the wavefront is a discontinuity and
+# carries every frequency the mesh has; the lumped chain disperses the high
+# ones, the wake differs between two gauges 400 mm apart, and `separate` -- one
+# uniform non-dispersive bar -- cannot fit both at once. The SHTB is spared
+# because its POM striker gives a smooth 59 us rise.
+#
+# Measured with EXACT positions and c0, so this is the model's floor and not an
+# identification error (refining the mesh moves it: 1.07e-2 -> 7.6e-3 at dx =
+# 0.25 on the input bar, converging slowly):
+#
+#            floor    +1 % transit-time error    threshold below
+#   input    1.07e-2  5.93e-2                    3.5e-2   (5.5x discrimination)
+#   output   3.26e-2  7.65e-2                    1.0e-1   (2.3x)
+#
+# The polycarbonate bar is the weaker screen of the two -- 2.3x, about what the
+# tension rig gets against a mismatched coupler. Treat a FAIL as conclusive and
+# a PASS as weak evidence, and re-measure both floors on your own rig with
+# known-good numbers rather than trusting these.
+null_tol_in = 3.5e-2
+null_tol_out = 1.0e-1
+
+[calibration_compression.numerics]
+ncyc = 6                          # ~6 input-bar and ~3 output-bar round trips,
+                                  # so every echo used below is in the record
+
+[calibration_compression.input_bar]     # same bars as [compression]
+E = 70.0
+rho = 2.7e-6
+diameter = 16.0
+L_input = 2000.0
+initial_velocity = 10.0
+
+[calibration_compression.output_bar]    # polycarbonate, as in [compression]
+E = 2.3
+rho = 1.2e-6
+diameter = 16.0
+L_output = 1000.0
+
+[calibration_compression.specimen]
+# NO SPECIMEN. Zero is literal: the mesh puts no element between the bars, the
+# two interface planes coincide on the contact plane, and the unilateral
+# condition is the single face where the bars actually touch. Every other
+# specimen key is meaningless at zero length and may be omitted.
+length = 0.0
 
 # ==========================================================================
 # TENSION: Split Hopkinson tension bar (simulate_tension.py)
@@ -86,11 +205,21 @@ elastic_only = false              # true disables the specimen's plasticity
 loading = "tension"
 gauges = [130.0, 530.0]
 
-[tension.bar]                     # 7075-T6 aluminium
+# The two bars are IDENTICAL here -- this is a conventional symmetric SHTB.
+# They are still written as two tables because every case has the same shape:
+# config.bar_lengths() and dump.npz's per-bar E / A / rho / c0 do not want to
+# know whether a given rig happens to use the same stock on both sides.
+# Keep the two in step unless you mean not to.
+[tension.input_bar]               # 7075-T6 aluminium
 E = 71.7
 rho = 2.81e-6
 diameter = 16.0
 L_input = 3000.0
+
+[tension.output_bar]              # 7075-T6 aluminium, the same bar
+E = 71.7
+rho = 2.81e-6
+diameter = 16.0
 L_output = 3000.0
 
 [tension.striker]                 # POM (polyoxymethylene / acetal) tube
@@ -193,11 +322,19 @@ null_tol = 2.5e-3                 # pass threshold on the rms residual. Measured
 [calibration_tension.numerics]
 ncyc = 8                          # ~4 round trips of the 6150 mm assembly
 
-[calibration_tension.bar]         # same bars as [tension]
+# Same bars as [tension], and here they MUST match each other: the whole
+# identification models the bolted-together assembly as ONE uniform bar, and
+# identify_bar_tension.py refuses to run if these two tables disagree.
+[calibration_tension.input_bar]
 E = 71.7
 rho = 2.81e-6
 diameter = 16.0
 L_input = 3000.0
+
+[calibration_tension.output_bar]
+E = 71.7
+rho = 2.81e-6
+diameter = 16.0
 L_output = 3000.0
 
 [calibration_tension.striker]     # the SAME 800 mm striker as [tension]:

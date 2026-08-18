@@ -6,6 +6,18 @@
 # against a stationary output bar. Explicit leapfrog integration of a lumped
 # mass-spring chain.
 #
+# The two bars are DIFFERENT: an aluminium input bar and a short polycarbonate
+# output bar, from [compression.input_bar] and [compression.output_bar]. The
+# chain is therefore not uniform -- element stiffness, area and density are
+# per-element arrays and nodal masses are assembled from the two adjacent
+# elements, exactly as simulate_tension.py already had to do for its steel
+# anvil. Getting that wrong at the aluminium/polycarbonate junction would give
+# the wrong reflection there, which is the whole point of the output bar.
+#
+# NOTE the dump still carries ONE set of bar properties (E, A, rho, c0), taken
+# from the INPUT bar. The reduction downstream therefore treats the output bar
+# as aluminium too, which it no longer is.
+#
 # Reduced to what the wave-separation pipeline consumes:
 #   - self.history_elems_strain, self.history_elems_force  (read by drive_compression.py)
 #   - specimen.dat                                          (ground truth for
@@ -30,25 +42,39 @@ class SimulateDirectImpact:
     def __init__(self, cfg=None):
         cfg = _config.load('compression') if cfg is None else cfg
         self.cfg = cfg
-        bar, spec, num = cfg['bar'], cfg['specimen'], cfg['numerics']
+        in_bar, out_bar = cfg['input_bar'], cfg['output_bar']
+        spec, num = cfg['specimen'], cfg['numerics']
 
-        # specimen properties
-        self.specimen_dia = spec['diameter']
-        self.specimen_cross_section_area = 0.25 * np.pi * self.specimen_dia**2
-        self.specimen_E = spec['E']
-        self.JC_A, self.JC_B, self.JC_n = spec['JC_A'], spec['JC_B'], spec['JC_n']
-        self.elastic_only = spec['elastic_only']
-
-        # bar properties and geometry
-        self.L_inputbar = bar['L_input']
-        self.L_outputbar = bar['L_output']
+        # Specimen properties. A calibration shot has NO specimen -- the two bar
+        # faces touch directly -- and says so with length = 0. Every material key
+        # is meaningless then, so none of them is required; the defaults below
+        # are never used because no element carries them.
         self.L_specimen = spec['length']
-        self.E_bar = bar['E']
-        self.rho = bar['rho']
-        self.rho_bar = self.rho     # name the dump contract shares with SimulateSHTB
-        self.diameter_bar = bar['diameter']
+        self.no_specimen = self.L_specimen == 0.0
+        _need = (lambda k: spec.get(k, 0.0)) if self.no_specimen else (lambda k: spec[k])
+        self.specimen_dia = _need('diameter') or in_bar['diameter']
+        self.specimen_cross_section_area = 0.25 * np.pi * self.specimen_dia**2
+        self.specimen_E = _need('E') or in_bar['E']
+        self.JC_A, self.JC_B, self.JC_n = _need('JC_A'), _need('JC_B'), _need('JC_n')
+        self.elastic_only = bool(spec.get('elastic_only', self.no_specimen))
+        # Only the specimen's inertia depends on this, and it is 10 mm of a
+        # 3010 mm chain: absent from the TOML, assume the input bar's alloy.
+        self.rho_specimen = spec.get('rho', in_bar['rho'])
+
+        # --- bar materials and geometry ------------------------------------
+        # E_bar / rho_bar / A_bar / diameter_bar are the INPUT bar. They keep
+        # those names because dump.py writes them as "the bar", and because the
+        # reduction has only one set of bar properties to be told about.
+        self.E_bar, self.rho_bar = in_bar['E'], in_bar['rho']
+        self.E_outbar, self.rho_outbar = out_bar['E'], out_bar['rho']
+        self.diameter_bar = in_bar['diameter']
+        self.diameter_outbar = out_bar['diameter']
         self.A_bar = 0.25 * np.pi * self.diameter_bar**2
-        self.initial_velocity = bar['initial_velocity']
+        self.A_outbar = 0.25 * np.pi * self.diameter_outbar**2
+
+        self.L_inputbar = in_bar['L_input']
+        self.L_outputbar = out_bar['L_output']
+        self.initial_velocity = in_bar['initial_velocity']
 
         # numerics
         self.courant = num['courant']
@@ -89,25 +115,26 @@ class SimulateDirectImpact:
             dx = self.x[1:] - self.x[0:-1]
             eps = (dx - self.dx0) / self.dx0
 
-            # purely elastic stress update of everything
-            stress = self.E_bar * eps  # initially, everything is treated as bar material
+            # purely elastic stress update, per element: the chain carries
+            # aluminium, specimen and polycarbonate and E is no longer one number
+            stress = self.E_elem * eps
 
             # now, overwrite stress for the specimen elements only
-            if not self.elastic_only:
+            if not self.elastic_only and not self.no_specimen:
                 stress[self.specimenIndices] = self.computeStressStrainSpecimen(dx[self.specimenIndices])
 
-            # enforce no-tension condition on specimen interface elements of both bars
-            stress[self.inputBarIndices[-1]] = min(stress[self.inputBarIndices[-1]], 0.0)
-            stress[self.outputBarIndices[0]] = min(stress[self.outputBarIndices[0]], 0.0)
+            # unilateral contact: a bar face can push, never pull. Two faces
+            # with a loose specimen between them, one when the bars touch.
+            for _f in self.contact_faces:
+                stress[_f] = min(stress[_f], 0.0)
 
-            # add artificial viscosity
+            # add artificial viscosity. It acts through the local impedance
+            # rho*c == sqrt(E*rho), which is per element for the same reason.
             dv = self.v[1:] - self.v[0:-1]
-            stress += self.damping * self.rho * self.c0 * dv
+            stress += self.damping * self.Zc_elem * dv
 
             # create element force array
-            element_forces = stress * self.A_bar  # ... treat everything as bar material
-            element_forces[self.specimenIndices] = (stress[self.specimenIndices]
-                                                    * self.specimen_cross_section_area)
+            element_forces = stress * self.A_elem
 
             self.f[:] = 0.0
             self.f[:-1] = element_forces  # ... distribute stress as nodal forces
@@ -134,8 +161,8 @@ class SimulateDirectImpact:
             if stress[i] < -yield_stress[i]:
                 dsig = stress[i] + yield_stress[i]  # amount outside the yield surface
                 stress[i] = -yield_stress[i]
-                # NOTE: this uses the BAR modulus, not specimen_E. Preserved as-is
-                # so the specimen response is unchanged; see README.
+                # NOTE: this uses the INPUT BAR modulus, not specimen_E.
+                # Preserved as-is so the specimen response is unchanged; see README.
                 deps = dsig / self.E_bar
                 self.eps_plastic[i] += deps
 
@@ -158,8 +185,10 @@ class SimulateDirectImpact:
         print("... wrote specimen.dat")
 
     def apply_initial_conditions(self):
-        # apply initial velocity to left bar
-        self.v[self.inputBarIndices] = self.initial_velocity
+        # Apply the impact velocity to the input bar's NODES. inputBarIndices is
+        # an element list now, so it cannot be reused here -- and the node on the
+        # interface plane belongs to the impacting face and must move too.
+        self.v[self.x <= self.L_inputbar] = self.initial_velocity
 
     def initialize_history_arrays(self):
         """
@@ -177,9 +206,16 @@ class SimulateDirectImpact:
             bar_indices=(self.inputBarIndices, self.outputBarIndices))
 
     def initialize_time_discretization(self):
-        self.c0 = np.sqrt(self.E_bar / self.rho)
-        endTime = self.N_cycles * 2 * min(self.L_inputbar, self.L_outputbar) / self.c0
-        self.dt = self.courant * self.dx0 / self.c0
+        # c0 is the INPUT bar's wave speed -- it is what dump.py writes and what
+        # the reduction uses. The output bar and the specimen have their own,
+        # and the fastest material present sets the stable timestep.
+        self.c0 = np.sqrt(self.E_bar / self.rho_bar)
+        self.c_outbar = np.sqrt(self.E_outbar / self.rho_outbar)
+        # Round trips of the SHORTER-IN-TIME bar, each at its own wave speed.
+        # With two identical bars this is the old min(L_in, L_out)*2/c0.
+        endTime = self.N_cycles * 2 * min(self.L_inputbar / self.c0,
+                                          self.L_outputbar / self.c_outbar)
+        self.dt = self.courant * self.dx0 / self.c_elem.max()
         self.num_timesteps = int(endTime / self.dt)
         # arange, not linspace: this must agree sample-for-sample with the
         # t = np.arange(N)*dt used by drive_compression.py and the reduction scripts.
@@ -195,33 +231,61 @@ class SimulateDirectImpact:
         self.m = np.zeros_like(self.x)  # nodal masses
         self.dx0 = self.x[1] - self.x[0]  # initial length of each spring
 
-        # indices of input bar, specimen, output bar.
-        # NOTE: built as NODE indices but used to index ELEMENT arrays, which
-        # shifts the specimen to elements 2001..2010, i.e. x in [2001, 2011]
-        # rather than the nominal [2000, 2010]. Preserved as-is; drive_compression.py
-        # derives the true interface planes from specimenIndices rather than
-        # assuming them, so the pipeline stays consistent either way.
-        specimenIndices = []
-        inputBarIndices = []
-        outputBarIndices = []
-        for i in range(self.N_x + 1):
-            pos = i * dx
-            if pos <= self.L_inputbar:
-                inputBarIndices.append(i)
-            elif self.L_inputbar < pos <= self.L_inputbar + self.L_specimen:
-                specimenIndices.append(i)
-            else:
-                outputBarIndices.append(i)
+        # Regions are assigned by ELEMENT CENTRE, element i spanning [i, i+1]*dx.
+        # This used to be built from NODE positions and then used on element
+        # arrays, which put the specimen one element to the right of nominal.
+        # That shortcut is no longer available: the MATERIAL PROPERTIES hang off
+        # these indices now, not just the labels, and the node version's last
+        # output-bar index runs one past the end of every element array.
+        # simulate_tension.py has always done it this way.
+        centres = (np.arange(self.N_x) + 0.5) * dx
+        x_spec0 = self.L_inputbar                       # input bar | specimen
+        x_spec1 = x_spec0 + self.L_specimen             # specimen | output bar
+        self.inputBarIndices = np.flatnonzero(centres < x_spec0)
+        self.specimenIndices = np.flatnonzero((centres >= x_spec0)
+                                              & (centres < x_spec1))
+        self.outputBarIndices = np.flatnonzero(centres >= x_spec1)
 
-        self.inputBarIndices = np.asarray(inputBarIndices)
-        self.specimenIndices = np.asarray(specimenIndices)
-        self.outputBarIndices = np.asarray(outputBarIndices)
+        # The bar elements bounding the specimen, where the unilateral (no
+        # tension) condition is enforced each step.
+        self.iface_in = int(self.inputBarIndices[-1])
+        self.iface_out = int(self.outputBarIndices[0])
+
+        # A loose specimen has a contact face on BOTH sides -- neither bar can
+        # pull it. With no specimen the bars touch on ONE plane, and iface_in
+        # and iface_out are the two elements meeting there; clipping both would
+        # stop the output bar carrying the tensile wave its own free end sends
+        # back, 1 mm inside the bar and for no physical reason. Clip the input
+        # side only: that single condition IS the contact.
+        self.contact_faces = ((self.iface_in,) if self.no_specimen
+                              else (self.iface_in, self.iface_out))
+
+        # per-element material properties; input bar everywhere, then overwrite
+        self.E_elem = np.full(self.N_x, self.E_bar)
+        self.A_elem = np.full(self.N_x, self.A_bar)
+        self.rho_elem = np.full(self.N_x, self.rho_bar)
+        for idx, (Ee, Ae, re) in (
+                (self.specimenIndices, (self.specimen_E,
+                                        self.specimen_cross_section_area,
+                                        self.rho_specimen)),
+                (self.outputBarIndices, (self.E_outbar, self.A_outbar,
+                                         self.rho_outbar))):
+            self.E_elem[idx], self.A_elem[idx], self.rho_elem[idx] = Ee, Ae, re
+
+        # local wave speed and impedance rho*c == sqrt(E*rho), per element
+        self.c_elem = np.sqrt(self.E_elem / self.rho_elem)
+        self.Zc_elem = np.sqrt(self.E_elem * self.rho_elem)
 
         # accumulated plastic strain, one entry per specimen element
         self.eps_plastic = np.zeros(len(self.specimenIndices), float)
 
-        # uniform mass per node
-        self.m[:] = self.rho * self.A_bar * self.dx0
+        # Nodal masses: half of each adjacent element's mass, so a node on a
+        # material junction gets the correct average and the free ends get half.
+        # A uniform mass per node was fine while the whole chain was one alloy;
+        # it would put aluminium inertia on the polycarbonate nodes now.
+        m_elem = self.rho_elem * self.A_elem * self.dx0
+        self.m[:-1] += 0.5 * m_elem
+        self.m[1:] += 0.5 * m_elem
 
 
 if __name__ == "__main__":

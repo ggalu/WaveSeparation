@@ -46,6 +46,7 @@ way to reach `[calibration_tension]` through it.
 | direct-impact compression bar | `python3 drive_compression.py` | `simulate_compression.py` |
 | SHTB with a specimen | `python3 drive_tension.py` | `simulate_tension.py` |
 | connected-bar calibration shot | `python3 drive_calibration_tension.py` | `simulate_tension.py` |
+| direct-impact calibration shot | `python3 drive_calibration_compression.py` | `simulate_compression.py` |
 
 The drivers are three lines each and set nothing themselves; they pick a case out
 of `config.toml`, run the model and write the dump. The simulators are kept
@@ -61,14 +62,18 @@ numerics and the analysis `eta`. The drivers and the analysis scripts read it;
 nothing is hardcoded in the Python any more. To move a gauge or change the
 striker, edit `config.toml` and re-run the driver.
 
-There is a third case besides the two above, `[calibration_tension]`: the same bars
-bolted together with no specimen, used to measure the gauge positions and `c0`
-from the record itself. See
-[Calibrating the bar](#calibrating-the-bar-from-a-connected-bar-shot).
+Two further cases exist, one per rig, in which the bars are joined with **no
+specimen** and the gauge positions and `c0` are measured from the record itself:
 
 ```bash
-python3 drive_calibration_tension.py && python3 identify_bar_tension.py
+python3 drive_calibration_tension.py     && python3 identify_bar_tension.py
+python3 drive_calibration_compression.py && python3 identify_bar_compression.py
 ```
+
+See [Calibrating the bar](#calibrating-the-bar-from-a-connected-bar-shot) for
+the SHTB and [Calibrating a direct-impact
+bar](#calibrating-a-direct-impact-bar) for the other, which is the easier of
+the two because both of its far ends are free.
 
 The cases are independent and have their own gauge lists:
 
@@ -1074,6 +1079,128 @@ an edge between its first and second passage. On a real bar the analogous term i
 Pochhammer–Chree dispersion, which is larger, so treat these figures as a floor
 rather than an expectation.
 
+## Calibrating a direct-impact bar
+
+The section above needs a threaded coupler and a tape measurement to a *gauge*.
+A direct-impact rig needs neither. Strike the two bars face to face with nothing
+between them, and read both of them off the record:
+
+```bash
+python3 drive_calibration_compression.py   # ~1 s  -> dump.npz
+python3 identify_bar_compression.py        # the identification
+```
+
+**Both far ends are free here, and that changes the method.** The SHTB has one
+clean reflector; its other end carries the anvil, which reflects like a free end
+displaced ~257 mm outward and cannot be modelled away. This rig has two. Each
+bar rings on its own round trip, and a gauge `x` from the contact face on a bar
+of length `L` sees three edges in the derivative of its record:
+
+| delay | sign | what |
+|---|---|---|
+| 0 | − | the wave arriving from the contact |
+| `2(L − x)/c` | + | the free-end echo, inverted |
+| `2L/c` | − | that echo re-reflected at the contact end |
+
+The third one is the prize: **`2L/c` is the same at every gauge on the bar**, so
+it is simultaneously the measurement and its own consistency check — the
+compression rig's analogue of the tension script's `Q`, and the better of the
+two. `Q` needs a tape measurement to a gauge; `2L/c` needs one to the end of the
+bar.
+
+### Two bars, two scales
+
+The scale degeneracy `(lengths, c) → (λ·lengths, λ·c)` applies to **each bar
+separately** here: once they part company the two are acoustically independent,
+and no timing on one says anything about the other's scale. So this script wants
+**two** measured lengths against the SHTB's one — `L_free_in_ref` and
+`L_free_out_ref` in `[calibration_compression]`, or `--l-in-ref` / `--l-out-ref`.
+Omit both and it falls back to the model's geometry, which is the self-check
+mode rather than the instrument.
+
+That is not the step backwards it looks like. Both are **bar lengths**, measured
+once on the bench before anything is glued on, rather than a gauge-to-free-end
+distance under a blob of adhesive. And on this rig the two speeds were never one
+number anyway: an aluminium input bar drives a polycarbonate output bar 3.7×
+slower.
+
+### The tape lands relatively, not absolutely
+
+Because the round trip is measured, a position comes out as
+
+```math
+x_k \;=\; L_\text{ref}\,\frac{f_3^{(k)} - f_2^{(k)}}{R},
+\qquad R = 2L/c \;\text{measured}
+```
+
+which is **proportional** to the supplied length. Measured, perturbing
+`--l-in-ref` by ±2 mm on the 2000 mm input bar:
+
+| quantity | ±2 mm of tape moves it by | as a fraction |
+|---|---|---|
+| `c` | ±5.09 mm/ms | ±1.0e-03 |
+| `x` (in-0 / in-1) | ±0.13 / ±0.53 mm | ±1.0e-03 |
+| `D` | ±0.40 mm | ±1.0e-03 |
+
+Compare [What is identifiable, and what is
+not](#what-is-identifiable-and-what-is-not): on the SHTB, `x = L_free +` a
+constant the tape never scales, so the same ±2 mm arrives as **±1.3 to ±2.0 mm
+absolute** on the positions. Here it does not. The leverage ratio `L_ref/D` is
+5.0 on the input bar and 2.5 on the output bar — worse than the tension rig's
+9.2, because the baseline is a bar rather than a bar-and-a-half — but it now
+applies to the positions as well as to `D`.
+
+### What comes out
+
+| quantity | identified | true | error |
+|---|---|---|---|
+| `c`, input (aluminium) | 5088.956 mm/ms | 5091.751 | **−5.5e-04** |
+| `c`, output (polycarbonate) | 1379.623 mm/ms | 1384.437 | **−3.5e-03** |
+| gauge in-0 / in-1 | 129.47 / 529.30 mm | 129.50 / 529.50 | −0.03 / −0.20 mm |
+| gauge out-0 / out-1 | 131.21 / 531.52 mm | 130.50 / 530.50 | +0.71 / +1.02 mm |
+| `D`, input / output | 399.836 / 400.313 mm | 400.00 | **−0.16 / +0.31 mm** |
+| `E` from `rho c^2`, in / out | 69.923 / 2.284 GPa | 70.000 / 2.300 | −1.1e-03 / −6.9e-03 |
+
+The input bar matches the SHTB's accuracy. **The polycarbonate bar is 6×
+worse, and the reason is the timestep.** `dt` is set by the fastest material
+present, so with `c = 1384` against the aluminium's 5092 the polycarbonate
+elements run at an effective Courant number of 0.22 — far from the
+non-dispersive 1.0 of [The scheme is exactly non-dispersive at courant =
+1](#the-scheme-is-exactly-non-dispersive-at-courant--1). That is a property of
+a one-timestep model of a two-material chain, not of the method.
+
+### The free-end null test, on both bars
+
+Both far ends are free, so [the free-end null
+test](#the-free-end-null-test) runs twice — two independent screens where the
+SHTB gets one. It is the only check in either script that consults no ground
+truth.
+
+**Its floor is much higher here, and the threshold has to follow.** A direct
+impact starts from a *velocity step*, so the wavefront is a discontinuity
+carrying every frequency the mesh has; the lattice disperses the high ones, the
+wake differs between two gauges 400 mm apart, and `separate` — one uniform
+non-dispersive bar — cannot fit both at once. The SHTB is spared because its POM
+striker gives a smooth 59 µs rise. Measured with **exact** positions and `c0`,
+so this is the model's floor and not an identification error:
+
+| bar | floor (exact inputs) | +1 % transit-time error | threshold | discrimination |
+|---|---|---|---|---|
+| input | 1.07e-02 | 5.93e-02 | 3.5e-02 | 5.5× |
+| output | 3.26e-02 | 7.65e-02 | 1.0e-01 | 2.3× |
+
+Hence `null_tol_in` and `null_tol_out` rather than one number: the two bars are
+different materials and their floors differ by 3×. Refining the mesh moves the
+floor and confirms the diagnosis — 1.07e-02 → 9.4e-03 → 7.6e-03 at `dx` = 1.0,
+0.5, 0.25 on the input bar — but it converges slowly, so this stays a coarse
+screen. As on the SHTB: **treat a FAIL as conclusive and a PASS as weak
+evidence**, and re-measure both floors on your own rig.
+
+The test is scale-invariant, verified: scaling `L_free` and `c` together by
+λ = 1.05 leaves both residuals identical. It constrains the transit times
+`L_free/c` and nothing else — which is exactly what `separate` consumes, and
+exactly what the tape cannot fix.
+
 ## Accuracy and time integration
 
 Both simulators use explicit leapfrog on a lumped mass-spring chain. That is a
@@ -1196,6 +1323,8 @@ specimen reduction, which is what the floor is actually made of.
 | `drive_compression.py` | Runs `simulate_compression.py`, writes `dump.npz`. Three lines — it sets nothing. |
 | `drive_tension.py` | Same for `simulate_tension.py`. Writes the same filename — the dumps overwrite each other. |
 | `drive_calibration_tension.py` | Runs the connected-bar calibration shot (`[calibration_tension]`, no specimen) through `simulate_tension.py`. |
+| `drive_calibration_compression.py` | Runs the direct-impact calibration shot (`[calibration_compression]`, the two bars struck face to face with **no specimen**) through `simulate_compression.py`. |
+| `identify_bar_compression.py` | Recovers each bar's gauge positions, spacing `D` and `c0` from that shot. Two bars, two wave speeds, two identifications. Needs one measured length **per bar** — each bar's own length, `L_free_in_ref` / `L_free_out_ref` in `config.toml`, or `--l-in-ref` / `--l-out-ref`. |
 | `identify_bar_tension.py` | Recovers gauge positions, spacing `D` and `c0` from that shot's echo train. Never reads the configured gauge list. Needs one measured length: `L_free_ref` in `config.toml`, or `--l-free-ref`. |
 | `reduce_specimen.py` | Full chain: gauges → specimen stress/strain, validated against the simulator's own measurement. `--headless` to skip the window. |
 | `lagrange_diagram.py` | The separated waves as x-t FIELDS across the whole assembly, from the ordinary dump. Prints the gauge round trip, the free-surface null and the interface force as numbers. |
@@ -1208,7 +1337,7 @@ specimen reduction, which is what the floor is actually made of.
 Generated at run time and safe to delete (`./clean.sh`): `dump.npz`,
 `specimen.dat`, `specimen_reconstructed.dat`, `gauge_forces.png`,
 `specimen_reconstruction.png`, `bar_identification_tension.png`,
-`lagrange_diagram.png`. `clean.sh` also removes the superseded
+`bar_identification_compression.png`, `lagrange_diagram.png`. `clean.sh` also removes the superseded
 `eps.npy` / `force.npy` / `meta.npz` / `meta.npy` if an older run left them.
 
 ## Dependencies

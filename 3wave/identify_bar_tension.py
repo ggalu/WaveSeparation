@@ -146,7 +146,22 @@ from wave_separation import separate
 # positions are not, and are never read here -- they are what is recovered.
 # --------------------------------------------------------------------------
 cfg = config.load('calibration_tension')
-L_OUTPUT = cfg['bar']['L_output']            # output-bar face -> free end [mm]
+
+# The whole identification models the bolted-together assembly as ONE uniform
+# bar of speed c0 -- that is what makes the echo train readable at all. So the
+# two bar tables must agree here, even though config.toml keeps them separate
+# for the compression case's sake. Refuse rather than quietly average them.
+_IN_BAR, _OUT_BAR = cfg['input_bar'], cfg['output_bar']
+for _k in ('E', 'rho', 'diameter'):
+    if _IN_BAR[_k] != _OUT_BAR[_k]:
+        raise SystemExit(
+            f"[calibration_tension.input_bar] and [calibration_tension.output_bar] "
+            f"disagree on {_k!r} ({_IN_BAR[_k]} vs {_OUT_BAR[_k]}).\n"
+            "This script identifies ONE uniform bar from its echo train; two "
+            "different bars\nwould need a different method entirely. Make the "
+            "two tables match in config.toml.")
+
+L_OUTPUT = _OUT_BAR['L_output']              # output-bar face -> free end [mm]
 # A bolted or threaded coupling has a thickness -- 150 mm on this rig -- and the
 # model carries it as the "specimen". Input-bar distances are quoted from the
 # input face, that much further from the free end. Zero for bars butted directly
@@ -158,8 +173,8 @@ L_OUTPUT = cfg['bar']['L_output']            # output-bar face -> free end [mm]
 # L_JOINT * (1/c_bar - 1/c_joint), and does so invisibly -- the Q check below
 # cannot see it. See "What a mismatched coupler costs" in README.md.
 L_JOINT = cfg['specimen']['length']
-L_ASSEMBLY = cfg['bar']['L_input'] + L_JOINT + L_OUTPUT
-DIAMETER = cfg['bar']['diameter']
+L_ASSEMBLY = _IN_BAR['L_input'] + L_JOINT + L_OUTPUT
+DIAMETER = _IN_BAR['diameter']
 AREA = 0.25 * np.pi * DIAMETER ** 2
 
 # THE tape measurement, and the only quantity here the experiment cannot supply
@@ -210,6 +225,11 @@ def _rise_index(g, frac=0.3):
 # load, differentiate
 # --------------------------------------------------------------------------
 d = load_dump()
+if d['loading'] != 'tension':
+    raise SystemExit(
+        f"this dump is a {d['loading']} shot; identify_bar_tension.py reads the "
+        "SHTB's\nassembly echo train. Run drive_calibration_tension.py, or use "
+        "identify_bar_compression.py\nif you meant the direct-impact rig.")
 t, dt, N = d['t'], d['dt'], d['N']
 n_in = d['eps_in'].shape[0]
 names = [f'in-{k}' for k in range(n_in)] + \
@@ -393,8 +413,8 @@ for k, nm in enumerate(names):
 print(f'  mean {Q_MEAN:.5f} ms over {ok.sum()} gauges, '
       f'spread {np.ptp(Q[ok])*1e3:.3f} us ({np.ptp(Q[ok])/Q_MEAN:.1e})')
 print(f'\nc0 = 2 L_free_ref / Q : {c0_id:.3f} mm/ms')
-print(f'c0 true               : {d["c0"]:.3f} mm/ms   '
-      f'rel err {(c0_id/d["c0"]-1):+.2e}')
+print(f'c0 true               : {d["c0_in"]:.3f} mm/ms   '
+      f'rel err {(c0_id/d["c0_in"]-1):+.2e}')
 print(f'tape contributes      : +-{L_FREE_REF_TOL/L_FREE_REF:.1e} '
       f'(+-{c0_id*L_FREE_REF_TOL/L_FREE_REF:.2f} mm/ms), which dominates '
       f'everything else')
@@ -487,7 +507,7 @@ print('separate() depends on x_k/c0 only. Note these do NOT inherit the tape\n'
       'and nothing else.\n')
 print(f'{"gauge":>7} {"x/c0 [us]":>12} {"true [us]":>12} {"rel err":>10}')
 for k, nm in enumerate(names):
-    a, b = id_pos[k] / c0_id, true_pos[k] / d['c0']
+    a, b = id_pos[k] / c0_id, true_pos[k] / d['c0_in']
     print(f'{nm:>7} {a*1e3:12.4f} {b*1e3:12.4f} {a/b-1:+10.2e}')
 
 # --------------------------------------------------------------------------
@@ -558,7 +578,8 @@ if null_rms > NULL_TOL:
 # --------------------------------------------------------------------------
 # density: NOT identifiable from the records; closed with the bar's mass
 # --------------------------------------------------------------------------
-m_bar = d['rho'] * AREA * L_ASSEMBLY
+# One uniform assembly, checked above, so either bar's density will do.
+m_bar = d['rho_in'] * AREA * L_ASSEMBLY
 E_id = (m_bar / (AREA * L_ASSEMBLY)) * c0_id ** 2
 
 print('\n--- density and modulus '
@@ -572,9 +593,9 @@ print(f'bar mass (weighed)      : {m_bar*1e3:.1f} g')
 print(f'rho = m / (A L)         : {m_bar/(AREA*L_ASSEMBLY):.4e} kg/mm^3   '
       f'(circular)')
 print(f'E   = rho c0^2          : {E_id:.3f} GPa   '
-      f'(true {d["E"]:.3f}, rel err {E_id/d["E"]-1:+.1e})')
+      f'(true {d["E_in"]:.3f}, rel err {E_id/d["E_in"]-1:+.1e})')
 print(f'E*A (the force scale)   : {E_id*AREA:.1f} kN   '
-      f'(true {d["E"]*d["A"]:.1f})')
+      f'(true {d["E_in"]*d["A_in"]:.1f})')
 
 print('\n--- ready to use '
       '----------------------------------------------------------')

@@ -24,23 +24,37 @@ from wave_separation import separate, bar_interface, specimen_response
 # One file, and the gauge signals arrive with their exact positions already
 # resolved -- see dump.py for the full field list.
 d = load_dump()
-E, A, c0, dt, t = d['E'], d['A'], d['c0'], d['dt'], d['t']
+# Per bar: the compression case runs aluminium against polycarbonate, so there
+# is no such thing as "the bar's" c0 or E*A. Each bar is separated, and turned
+# into a force, with its OWN numbers.
+E_IN, A_IN, C_IN = d['E_in'], d['A_in'], d['c0_in']
+E_OUT, A_OUT, C_OUT = d['E_out'], d['A_out'], d['c0_out']
+dt, t = d['dt'], d['t']
 L_SPEC, A_SPEC = d['L_specimen'], d['A_specimen']
 LOADING, ETA = d['loading'], d['eta']
+
+if L_SPEC == 0.0:
+    raise SystemExit(
+        'this dump has NO specimen -- the two bar faces were struck straight against\n'
+        'each other, which is a calibration shot. There is nothing to reduce.\n'
+        'Run identify_bar_compression.py on it, or drive_compression.py for a shot\n'
+        'with a specimen in it.')
 
 # --- separate each bar, then reduce ---------------------------------------
 # The input bar's interior lies toward global -x, the output bar's toward +x.
 # eta comes from config.toml: stress is insensitive to it, but strain (which
 # requires integration) degrades badly below ~0.5 /ms. See the regularisation
 # notes in wave_separation.py.
-p_in, m_in = separate(t, d['eps_in'], d['pos_in'], c0=c0, eta=ETA)
-p_out, m_out = separate(t, d['eps_out'], d['pos_out'], c0=c0, eta=ETA)
+p_in, m_in = separate(t, d['eps_in'], d['pos_in'], c0=C_IN, eta=ETA)
+p_out, m_out = separate(t, d['eps_out'], d['pos_out'], c0=C_OUT, eta=ETA)
 
 # v0: separation cannot see rigid-body motion, so each bar's pre-impact velocity
 # must be added back. Both come from the dump -- the direct-impact input bar
 # arrives at 10 mm/ms, an SHTB's bars are both at rest.
-F_in, v_in = bar_interface(p_in, m_in, E, A, c0, outward=-1, v0=d['v0_in'])
-F_out, v_out = bar_interface(p_out, m_out, E, A, c0, outward=+1, v0=d['v0_out'])
+F_in, v_in = bar_interface(p_in, m_in, E_IN, A_IN, C_IN,
+                           outward=-1, v0=d['v0_in'])
+F_out, v_out = bar_interface(p_out, m_out, E_OUT, A_OUT, C_OUT,
+                             outward=+1, v0=d['v0_out'])
 
 res = specimen_response(t, F_in, v_in, F_out, v_out, L_SPEC, A_SPEC,
                         loading=LOADING)
@@ -64,6 +78,12 @@ win = (t >= _t0) & (t <= _t1)
 def relerr(a, b):
     return np.linalg.norm(a[win] - b[win]) / np.linalg.norm(b[win])
 
+if (E_IN, A_IN) != (E_OUT, A_OUT):
+    print(f'bars differ: input  E={E_IN:g} GPa, A={A_IN:.1f} mm2, '
+          f'c0={C_IN:.0f} mm/ms\n'
+          f'             output E={E_OUT:g} GPa, A={A_OUT:.1f} mm2, '
+          f'c0={C_OUT:.0f} mm/ms '
+          f'(impedance {(E_OUT*A_OUT/C_OUT)/(E_IN*A_IN/C_IN):.3f}x the input)')
 print(f'loading = {LOADING}, eta = {ETA} /ms, '
       f'{len(d["pos_in"])} gauges per bar at '
       f'{[f"{p:.1f}" for p in d["pos_in"]]} mm (input), '
