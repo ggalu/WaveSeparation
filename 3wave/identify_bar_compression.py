@@ -85,13 +85,20 @@ _ap.add_argument('--l-out-ref', type=float, metavar='MM', dest='L_out_ref',
 _ap.add_argument('--l-free-ref-tol', type=float, metavar='MM',
                  dest='L_free_ref_tol',
                  help='what the tape is good to [mm], applied to both bars.')
+_ap.add_argument('--experiment', metavar='CASE', default=None,
+                 help='identify a MEASURED shot named by a config case '
+                      '(e.g. experiment_pc_bar) instead of the simulated '
+                      'calibration dump. There is no ground truth then, so the '
+                      'true/error columns print a dash.')
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
 import config
 from dump import load_dump
 from wave_separation import separate
 
-cfg = config.load('calibration_compression')
+CASE = ARGS.experiment or 'calibration_compression'
+EXPERIMENT = CASE in config.EXPERIMENT_CASES
+cfg = config.load(CASE)
 
 # The two measured lengths -- one per bar, because the two bars are
 # acoustically independent once they separate. config.toml is their durable
@@ -156,7 +163,11 @@ def _rise_time(g, dt):
 # --------------------------------------------------------------------------
 # load
 # --------------------------------------------------------------------------
-d = load_dump()
+if EXPERIMENT:
+    from experiment import load_experiment
+    d = load_experiment(CASE)
+else:
+    d = load_dump()
 t, dt, N = d['t'], d['dt'], d['N']
 
 if d['loading'] != 'compression':
@@ -169,21 +180,50 @@ if d['L_specimen'] != 0.0:
         "the identification\nassumes they are struck face to face. Run "
         "drive_calibration_compression.py.")
 
-BARS = ('in', 'out')
+# WHICH BARS ARE IDENTIFIABLE is a property of the record, not of the rig. A bar
+# needs two gauges before `separate` has two equations for two unknowns, and a
+# real rig routinely instruments one bar and not the other -- the PC shot has no
+# gauge on its aluminium input bar at all. Asking the data rather than assuming
+# ('in', 'out') is what lets one script serve both.
+ALL_BARS = ('in', 'out')
+BARS = tuple(b for b in ALL_BARS if d[f'eps_{b}'].shape[0] >= 2)
+SKIPPED = {b: int(d[f'eps_{b}'].shape[0]) for b in ALL_BARS if b not in BARS}
+if not BARS:
+    raise SystemExit('no bar in this record carries two gauges; nothing to '
+                     'identify. Separation needs two equations per bar.')
+
 NAMES = {b: [f'{b}-{k}' for k in range(d[f'eps_{b}'].shape[0])] for b in BARS}
 SIG = {b: [d[f'eps_{b}'][k] for k in range(d[f'eps_{b}'].shape[0])] for b in BARS}
 GRAD = {b: [np.gradient(s, dt) for s in SIG[b]] for b in BARS}
-TRUE_POS = {b: list(d[f'pos_{b}']) for b in BARS}
-TRUE_C = {'in': d['c0_in'], 'out': d['c0_out']}
-TRUE_L = {'in': d['L_free_in'], 'out': d['L_free_out']}
+
+# Ground truth is a property of a SIMULATED record and of nothing else. On a
+# measured shot these stay empty and every `true` / `error` column prints a
+# dash, rather than being filled with the tape values -- which would quietly
+# turn an input into a validation. UNITS likewise: a dump carries strain, a
+# scope carries whatever the conditioner was calibrated in.
+TRUE_POS = {b: list(d[f'pos_{b}']) for b in BARS} if not EXPERIMENT else {}
+TRUE_C = {'in': d['c0_in'], 'out': d['c0_out']} if not EXPERIMENT else {}
+TRUE_L = {'in': d['L_free_in'], 'out': d['L_free_out']} if not EXPERIMENT else {}
+TAPE_POS = {b: list(d[f'pos_{b}']) for b in BARS} if EXPERIMENT else {}
+UNITS = d.get('units', 'strain')
+SCALE, USYM = (1.0, UNITS) if EXPERIMENT else (1e6, 'ustrain')
+PKFMT = '10.4g' if EXPERIMENT else '10.1f'
 
 print(__doc__.split('---')[0].strip())
+if EXPERIMENT:
+    print(f'\nMEASURED shot     : {d["source"]}')
+    print('no ground truth   : the true/error columns print a dash. The only '
+          'checks are\n                    internal -- the 2L/c spread across '
+          'gauges, and the free-end null.')
 print(f'\nrecord            : {N} samples at {dt*1e3:.4f} us  ({t[-1]:.3f} ms)')
-print(f'gauges            : {sum(len(v) for v in NAMES.values())}, '
-      'positions NOT read from config')
-print('the two bars are identified INDEPENDENTLY -- separate templates, '
-      'separate\nround trips, separate wave speeds. Nothing crosses between '
-      'them.')
+print(f'gauges            : {sum(len(v) for v in NAMES.values())} on '
+      f'{len(BARS)} bar(s), positions NOT read from config')
+for b, n_g in SKIPPED.items():
+    print(f'{"":18}  {b} bar SKIPPED: {n_g} gauge(s), and separation needs 2')
+if len(BARS) > 1:
+    print('the two bars are identified INDEPENDENTLY -- separate templates, '
+          'separate\nround trips, separate wave speeds. Nothing crosses '
+          'between them.')
 
 
 # --------------------------------------------------------------------------
@@ -234,25 +274,45 @@ def read_bar(bar):
     neg = [cands(c, a, -1) for c, a in zip(corr, f1)]
     tol = 0.6 * (n_t * dt)
 
-    shared, best = None, 1
-    for probe, _ in [x for cs in neg for x in cs]:
-        hits = [min((x for x, _ in cs), key=lambda x: abs(x - probe))
-                for cs in neg if any(abs(x - probe) < tol for x, _ in cs)]
-        if len(hits) > best:
-            best, shared = len(hits), float(np.median(hits))
-    if shared is not None and best < len(names):
-        shared = None            # shared by some but not all: not a common event
+    # EVERY shared delay comes out, not just one. A delay that is identical at
+    # every gauge cannot be an echo -- an echo's delay is 2(L-x)/c and depends
+    # on x -- so it is something that happened once, at the contact, and
+    # propagated to all of them alike. There is usually one such event (the bars
+    # parting) and the original code found exactly one.
+    #
+    # A LONG striker breaks that. The PC shot is driven by 2415 mm of aluminium
+    # against a 1027 mm bar, so the striker's own round trip is 944 us against
+    # the bar's 1460: it is still in contact when the free-end echo comes back,
+    # and its unloading staircase puts a shared edge at 944 us AND another near
+    # 1424 us. Finding one and stopping leaves the other in the pool, where it
+    # competes with the real echo on amplitude. On this record the real echoes
+    # happen to be stronger (0.30 / 0.54 against 0.14 / 0.18) so the answer
+    # survives -- but that is luck, and a shot with a softer edge would not get
+    # it. Removing them all costs one loop.
+    shared = []
+    pool = [list(cs) for cs in neg]
+    while True:
+        found, best = None, 1
+        for probe, _ in [x for cs in pool for x in cs]:
+            hits = [min((x for x, _ in cs), key=lambda x: abs(x - probe))
+                    for cs in pool if any(abs(x - probe) < tol for x, _ in cs)]
+            if len(hits) > best:
+                best, found = len(hits), float(np.median(hits))
+        if found is None or best < len(names):
+            break                # shared by some but not all: not a common event
+        # strength of the shared edge, for reporting: the mean over gauges
+        amp = float(np.mean([max(v for x, v in cs if abs(x - found) < tol)
+                             for cs in pool]))
+        shared.append((found, amp))
+        pool = [[(x, v) for x, v in cs if abs(x - found) > tol] for cs in pool]
+    shared.sort()
 
     # The STRONGEST surviving edge, not the earliest. A wavefront in a lumped
     # chain rings, so the correlation carries sidelobes a few microseconds
     # ahead of the true peak; taking the first candidate locks onto one of
     # those and lands the position several mm out. Amplitude picks the edge.
-    f2 = []
-    for k, cs in enumerate(neg):
-        keep = [(x, v) for x, v in cs
-                if shared is None or abs(x - shared) > tol]
-        f2.append(f1[k] + max(keep, key=lambda p: p[1])[0] if keep else np.nan)
-    f2 = np.array(f2)
+    f2 = np.array([f1[k] + max(cs, key=lambda p: p[1])[0] if cs else np.nan
+                   for k, cs in enumerate(pool)])
 
     # f3: the same echo re-reflected at the contact end, so it is a negative-
     # going step again -- a POSITIVE correlation peak, after f2.
@@ -266,7 +326,7 @@ def read_bar(bar):
                   if keep else np.nan)
     f3 = np.array(f3)
     return dict(f1=f1, f2=f2, f3=f3, corr=corr, template=template,
-                rise=rise, n_t=n_t, shared=shared)
+                rise=rise, n_t=n_t, shared=shared, tol=tol)
 
 
 READ = {b: read_bar(b) for b in BARS}
@@ -275,17 +335,19 @@ print('\n--- edges, per gauge '
       '------------------------------------------------------')
 print(f'{"gauge":>7} {"peak":>10} {"f1 arrive":>10} {"f2 free end":>12} '
       f'{"f3 round trip":>14} {"2L/c":>10}')
-print(f'{"":>7} {"[ustrain]":>10} {"[ms]":>10} {"[ms]":>12} {"[ms]":>14} '
+print(f'{"":>7} {"["+USYM+"]":>10} {"[ms]":>10} {"[ms]":>12} {"[ms]":>14} '
       f'{"[us]":>10}')
 for b in BARS:
     r = READ[b]
     for k, nm in enumerate(NAMES[b]):
-        print(f'{nm:>7} {np.abs(SIG[b][k]).max()*1e6:10.1f} {r["f1"][k]:10.4f} '
+        print(f'{nm:>7} {np.abs(SIG[b][k]).max()*SCALE:{PKFMT}} {r["f1"][k]:10.4f} '
               f'{r["f2"][k]:12.4f} {r["f3"][k]:14.4f} '
               f'{(r["f3"][k]-r["f1"][k])*1e3:10.3f}')
-    if r['shared'] is not None:
-        print(f'{"":>7} edge shared by every gauge at +{r["shared"]*1e3:.1f} us '
-              '-- the bars parting, not an echo; excluded')
+    for k, (x, _) in enumerate(r['shared']):
+        what = ('the striker unloading' if k == 0 and len(r['shared']) > 1
+                else 'the bars parting')
+        print(f'{"":>7} edge shared by every gauge at +{x*1e3:.1f} us -- '
+              f'{what}, not an echo; excluded')
     print(f'{"":>7} rise {r["rise"]*1e3:.1f} us (measured) -> template '
           f'{r["n_t"]*dt*1e3:.1f} us')
 
@@ -313,10 +375,18 @@ for b in BARS:
     # THE measured length for this bar. The model's own geometry is the
     # FALLBACK, which makes the run a self-check rather than an instrument.
     if L_REF_CFG[b] is None:
+        if b not in TRUE_L:
+            raise SystemExit(
+                f'{b} bar: no reference length. A measured shot has no model '
+                f'geometry to fall\nback on, so L_free_{b}_ref must be in '
+                f'config.toml or given as --l-{b}-ref. One\nlength per bar is '
+                'the irreducible minimum -- see "Two bars, two scales" above.')
         L_ref, src = TRUE_L[b], 'model geometry -- nothing configured, SELF-CHECK'
     else:
         L_ref, src = float(L_REF_CFG[b]), 'tape, bench measurement of the bar'
-        if abs(L_ref - TRUE_L[b]) > L_REF_TOL:
+        # Only a simulated record has a geometry to be checked against. On a
+        # measured one the tape IS the geometry and there is nothing to compare.
+        if b in TRUE_L and abs(L_ref - TRUE_L[b]) > L_REF_TOL:
             print(f'\n!! WARNING: {b} bar reference length is {L_ref:.1f} mm but '
                   f'the model\n!! geometry says {TRUE_L[b]:.1f} mm, a slip of '
                   f'{L_ref - TRUE_L[b]:+.1f} mm, outside +-{L_REF_TOL:.1f} mm. '
@@ -340,32 +410,74 @@ print(f'{"bar":>5} {"L_ref [mm]":>11} {"R = 2L/c [ms]":>15} {"spread":>10} '
 for b in BARS:
     i, r = ID[b], READ[b]
     spread = np.ptp(i['R'][i['ok']]) * 1e3 if i['ok'].sum() > 1 else 0.0
+    _tc = TRUE_C.get(b)
     print(f'{b:>5} {i["L_ref"]:11.1f} {i["R_MEAN"]:15.5f} {spread:9.3f}u '
-          f'{i["c"]:11.3f} {TRUE_C[b]:10.3f} {i["c"]/TRUE_C[b]-1:+10.2e}')
+          f'{i["c"]:11.3f} {_tc:10.3f} {i["c"]/_tc-1:+10.2e}' if _tc else
+          f'{b:>5} {i["L_ref"]:11.1f} {i["R_MEAN"]:15.5f} {spread:9.3f}u '
+          f'{i["c"]:11.3f} {'-':>10} {'-':>10}')
     print(f'{"":>5} source: {i["src"]}')
 
 print('\n--- gauge positions '
       '-------------------------------------------------------')
-print(f'{"gauge":>7} {"x (from face)":>15} {"+-tape":>8} {"true":>9} '
+_ref_lbl = 'tape' if EXPERIMENT else 'true'
+print(f'{"gauge":>7} {"x (from face)":>15} {"+-tape":>8} {_ref_lbl:>9} '
       f'{"error":>9} {"L_free":>10}')
 for b in BARS:
     i = ID[b]
     band = L_REF_TOL / i['L_ref'] * i['x']       # relative, not absolute
+    # On a measured shot the tape positions are shown for COMPARISON only. They
+    # are an independent measurement of the same quantity, not ground truth, and
+    # the identification was not given them.
+    ref = TRUE_POS.get(b) or TAPE_POS.get(b)
     for k, nm in enumerate(NAMES[b]):
-        print(f'{nm:>7} {i["x"][k]:15.2f} {band[k]:8.2f} {TRUE_POS[b][k]:9.2f} '
-              f'{i["x"][k]-TRUE_POS[b][k]:+9.3f} {i["L_free"][k]:10.2f}')
+        if ref is None:
+            print(f'{nm:>7} {i["x"][k]:15.2f} {band[k]:8.2f} {"-":>9} '
+                  f'{"-":>9} {i["L_free"][k]:10.2f}')
+        else:
+            print(f'{nm:>7} {i["x"][k]:15.2f} {band[k]:8.2f} {ref[k]:9.2f} '
+                  f'{i["x"][k]-ref[k]:+9.3f} {i["L_free"][k]:10.2f}')
+if EXPERIMENT and TAPE_POS:
+    print('the "tape" column is an INDEPENDENT MEASUREMENT, not truth -- the '
+          'identification\nwas never shown it. A common offset shared by every '
+          'gauge is benign (it moves\nwhere the wave is reconstructed, not its '
+          'shape); a spread between them is not.')
 
 print('\n--- gauge spacing D, which is what the reduction leans on '
       '-----------')
-print(f'{"bar":>5} {"D = c * lag":>13} {"true":>9} {"error":>9} {"+-tape":>9}')
+# TWO ROUTES TO D, and they are not equally good.
+#
+#   x from (f3 - f2):  both features have travelled the SAME path to the same
+#                      gauge, so whatever an attenuating bar does to an edge it
+#                      does to both, and the difference is clean.
+#   c * lag:           the arrival lag compares gauge 1 with gauge 2, and the
+#                      far gauge's edge has propagated D further. In a lossy bar
+#                      that edge is broader and its correlation peak lands
+#                      LATER, so this route reads long.
+#
+# On the elastic simulated bars the two agree and this is a formality. On the
+# real PC bar they differ by 3 mm against 0.9 mm of error, and the difference is
+# a MEASUREMENT of the edge-broadening bias rather than a fault. Print both.
+_ref_lbl2 = 'tape' if EXPERIMENT else 'true'
+print(f'{"bar":>5} {"D (f3-f2)":>11} {"D = c*lag":>11} {"broadening":>11} '
+      f'{_ref_lbl2:>9} {"error":>9} {"+-tape":>9}')
 for b in BARS:
     i, r = ID[b], READ[b]
     if len(NAMES[b]) < 2:
         continue
     D_id = abs(i['x'][1] - i['x'][0])
-    D_true = abs(TRUE_POS[b][1] - TRUE_POS[b][0])
-    print(f'{b:>5} {D_id:13.3f} {D_true:9.2f} {D_id-D_true:+9.3f} '
-          f'{L_REF_TOL/i["L_ref"]*D_id:9.3f}')
+    D_lag = i['c'] * abs(r['f1'][1] - r['f1'][0])
+    ref = TRUE_POS.get(b) or TAPE_POS.get(b)
+    D_ref = abs(ref[1] - ref[0]) if ref else None
+    cols = (f'{b:>5} {D_id:11.3f} {D_lag:11.3f} {D_lag-D_id:+11.3f} ')
+    cols += (f'{D_ref:9.2f} {D_id-D_ref:+9.3f} ' if D_ref is not None
+             else f'{"-":>9} {"-":>9} ')
+    print(cols + f'{L_REF_TOL/i["L_ref"]*D_id:9.3f}')
+print('the "broadening" column is c*lag minus D: how much longer the '
+      'arrival-lag route\nreads because the far gauge sees a BROADER edge. It '
+      'is ~1 us here from the lumped\nchain\'s own numerical dispersion and '
+      '3 us on the real PC bar, where the loss is\nphysical. Either way D from '
+      '(f3 - f2) is the route to use: both of its features\ntravelled the same '
+      'path, so the bias cancels.')
 _lev = [ID[b]['L_ref'] / abs(ID[b]['x'][1] - ID[b]['x'][0])
         for b in BARS if len(NAMES[b]) > 1]
 print(f'leverage L_ref/D = {", ".join(f"{v:.1f}" for v in _lev)}: a tape good to '
@@ -379,8 +491,53 @@ print(f'{"gauge":>7} {"x/c [us]":>12} {"true [us]":>12} {"rel err":>10}')
 for b in BARS:
     i = ID[b]
     for k, nm in enumerate(NAMES[b]):
-        a, c = i['x'][k] / i['c'], TRUE_POS[b][k] / TRUE_C[b]
-        print(f'{nm:>7} {a*1e3:12.4f} {c*1e3:12.4f} {a/c-1:+10.2e}')
+        a = i['x'][k] / i['c']
+        if b in TRUE_POS and b in TRUE_C:
+            c = TRUE_POS[b][k] / TRUE_C[b]
+            print(f'{nm:>7} {a*1e3:12.4f} {c*1e3:12.4f} {a/c-1:+10.2e}')
+        else:
+            print(f'{nm:>7} {a*1e3:12.4f} {"-":>12} {"-":>10}')
+
+# --------------------------------------------------------------------------
+# attenuation -- only where the record shows it
+# --------------------------------------------------------------------------
+# A metal bar is lossless enough to ignore and this section then does nothing.
+# A POLYMER bar is not, and `separate` fitting one lossless pair of waves to two
+# gauges that disagree about the wave's SHAPE is what puts a floor under
+# everything below. alpha(f) is measured from the two gauges themselves --
+# magnitudes only, no boundary condition -- so the free-end null underneath
+# stays an independent check of it rather than its objective.
+ATT = {b: None for b in BARS}
+if EXPERIMENT and 'attenuation' in cfg:
+    from identify_attenuation import fit_attenuation
+    ac = cfg['attenuation']
+    print('\n--- attenuation, from the two gauges alone '
+          '--------------------------')
+    for b in BARS:
+        i, r = ID[b], READ[b]
+        try:
+            a = fit_attenuation(t, SIG[b], i['x'], r['f1'], r['f2'],
+                                f_lo=float(ac.get('f_lo', 2.0)),
+                                f_hi=float(ac.get('f_hi', 50.0)),
+                                snr=float(ac.get('snr', 0.005)))
+        except ValueError as exc:
+            print(f'{b:>5} not measurable: {exc}')
+            continue
+        ATT[b] = a['table']
+        fb, ab = a['table']
+        print(f'{b:>5} single-wave window {a["span"]*1e3:.0f} us, '
+              f'{a["pairs"]} gauge pair(s), band {a["f_lo"]:.0f}-{a["f_hi"]:.0f} kHz')
+        print(f'{"":>5} alpha at 10 / 25 / {a["f_hi"]:.0f} kHz: '
+              f'{np.interp(10, fb, ab):.2e} / {np.interp(25, fb, ab):.2e} / '
+              f'{ab[-1]:.2e} /mm   (linear-law summary k = {a["k"]:.2e})')
+        print(f'{"":>5} far gauge predicted from the near one: '
+              f'{a["misfit"]:.3f} relative L2, against {a["misfit_lossless"]:.3f} '
+              f'lossless')
+        print(f'{"":>5} c_p from the transfer-function PHASE: {a["c_p"]:.1f} '
+              f'mm/ms, an independent look at c ({i["c"]:.1f} from 2L/c)')
+    print(f'{"":>5} the table ENDS at f_hi and np.interp holds it there, which '
+          'is the band\n      limit: exp(+alpha x) on the minus branch would '
+          'otherwise grow without bound.')
 
 # --------------------------------------------------------------------------
 # free-end null test -- on BOTH bars, because both far ends are free
@@ -401,32 +558,56 @@ for b in BARS:
 # differ by 3x, so a single number would either pass everything on one bar or
 # fail everything on the other. config.toml carries both, with the measured
 # floors that set them.
-NULL_WINDOW = cfg.get('null_window', 0.75)
-NULL_TOL = {b: cfg.get(f'null_tol_{b}', 1.0e-1) for b in BARS}
+# An experiment case carries one [.null] table -- one instrumented bar, one
+# threshold -- where a simulated two-bar case carries null_tol_in / null_tol_out.
+if EXPERIMENT:
+    _nc = cfg.get('null', {})
+    NULL_WINDOW = float(_nc.get('window', 0.75))
+    NULL_TOL = {b: float(_nc.get('tol', 1.0e-1)) for b in BARS}
+else:
+    NULL_WINDOW = cfg.get('null_window', 0.75)
+    NULL_TOL = {b: cfg.get(f'null_tol_{b}', 1.0e-1) for b in BARS}
 
 print('\n--- free-end null test (no ground truth used) '
       '-----------------------------')
-print('both far ends are free, so both bars are screened -- the SHTB gets this '
-      'on one\nbar only. The floor is high here: a direct impact starts from a '
-      'velocity STEP,\nand the dispersed wake behind that wavefront is not '
-      'something one uniform\nnon-dispersive bar can fit at two gauges at '
-      'once.\n')
-print(f'{"bar":>5} {"peak |eps+|":>13} {"rms":>11} {"max":>11} '
+if len(BARS) > 1:
+    print('both far ends are free, so both bars are screened -- the SHTB gets '
+          'this on one\nbar only.')
+print('The floor is high on a direct impact: it starts from a velocity STEP, '
+      'and the\ndispersed wake behind that wavefront is not something one '
+      'uniform bar can fit at\ntwo gauges at once. Where the bar is also lossy '
+      'the attenuation above is what\nbrings it down -- and that is a fair '
+      'test, because alpha was fitted to gauge\nmagnitudes and never to this '
+      'boundary condition.\n')
+print(f'{"bar":>5} {"peak |wave+|":>13} {"rms":>11} {"max":>11} '
       f'{"threshold":>11} {"verdict":>9}')
 NULL = {}
-for b in BARS:
+def _null(b, attenuation):
     i = ID[b]
-    p, m = separate(t, SIG[b], i['L_free'], c0=i['c'], eta=d['eta'])
+    p, m = separate(t, SIG[b], i['L_free'], c0=i['c'], eta=d['eta'],
+                    attenuation=attenuation)
     tot, amp = p + m, np.abs(p).max()
     i0 = int(np.argmax(np.abs(p) > 0.02 * amp))
     i1 = int(NULL_WINDOW * N)
     w = slice(i0, i1)
-    rms = float(np.sqrt(np.mean(tot[w] ** 2)) / amp)
-    mx = float(np.abs(tot[w]).max() / amp)
-    NULL[b] = dict(p=p, m=m, tot=tot, amp=amp, w=w, i0=i0, i1=i1, rms=rms,
-                   tol=NULL_TOL[b])
-    print(f'{b:>5} {amp*1e6:12.1f}u {rms:11.2e} {mx:11.2e} {NULL_TOL[b]:11.1e} '
-          f'{"PASS" if rms <= NULL_TOL[b] else "FAIL":>9}')
+    return dict(p=p, m=m, tot=tot, amp=amp, w=w, i0=i0, i1=i1,
+                rms=float(np.sqrt(np.mean(tot[w] ** 2)) / amp),
+                mx=float(np.abs(tot[w]).max() / amp), tol=NULL_TOL[b])
+
+for b in BARS:
+    NULL[b] = _null(b, ATT[b])
+    r = NULL[b]
+    _pk = (f'{r["amp"]*SCALE:12.1f}u' if not EXPERIMENT
+           else f'{r["amp"]*SCALE:12.4g} ')
+    print(f'{b:>5} {_pk}{r["rms"]:11.2e} {r["mx"]:11.2e} '
+          f'{NULL_TOL[b]:11.1e} '
+          f'{"PASS" if r["rms"] <= NULL_TOL[b] else "FAIL":>9}')
+    # What the attenuation was worth, on a test it was not fitted to.
+    if ATT[b] is not None:
+        print(f'{"":>5} lossless, same positions and c: '
+              f'{_null(b, None)["rms"]:.2e} -- the attenuation is worth '
+              f'{_null(b, None)["rms"]/r["rms"]:.1f}x here, on a boundary '
+              'condition it never saw')
 print('\na FAIL is conclusive; a PASS is weak evidence. The test constrains '
       'L_free/c\nand nothing else, so it cannot see a tape error at all -- '
       'scaling L_free and c\ntogether leaves it unchanged.')
@@ -444,10 +625,21 @@ print(f'{"bar":>5} {"rho [kg/mm3]":>14} {"E = rho c^2":>12} {"true":>9} '
       f'{"rel err":>10} {"E*A [kN]":>11}')
 for b in BARS:
     i = ID[b]
-    rho, A = d[f'rho_{b}'], d[f'A_{b}']
+    rho, A = d.get(f'rho_{b}'), d.get(f'A_{b}')
+    if rho is None:
+        print(f'{b:>5} {"-":>14}   no density supplied; E cannot be closed')
+        continue
     E_id = rho * i['c'] ** 2
-    print(f'{b:>5} {rho:14.4e} {E_id:12.3f} {d[f"E_{b}"]:9.3f} '
-          f'{E_id/d[f"E_{b}"]-1:+10.2e} {E_id*A:11.1f}')
+    E_true = d.get(f'E_{b}')
+    tail = (f'{E_true:9.3f} {E_id/E_true-1:+10.2e} ' if E_true is not None
+            else f'{"-":>9} {"-":>10} ')
+    print(f'{b:>5} {rho:14.4e} {E_id:12.3f} ' + tail +
+          (f'{E_id*A:11.1f}' if A is not None else f'{"-":>11}'))
+if EXPERIMENT:
+    print('rho above is an ASSUMED handbook value, so E inherits its error '
+          'directly and\nis a closure rather than a measurement. Note the '
+          'reconstruction never asks for\neither: force in gives force out, '
+          'and only c, the positions and eta are used.')
 
 print('\n--- ready to use '
       '----------------------------------------------------------')
@@ -455,6 +647,48 @@ for b in BARS:
     i = ID[b]
     print(f'  {b:>3} bar:  c0 = {i["c"]:.3f}   gauges = '
           f'[{", ".join(f"{p:.2f}" for p in i["x"])}]    # mm from its face')
+
+# The uninstrumented bar is not identified, but a shot with a long striker
+# hands over its wave speed anyway: the shared edge every gauge sees is the
+# striker's own release returning, so its delay is 2 L_striker / c_striker. It
+# costs nothing and it is a check on the whole time base.
+_P = min((r['shared'][0][0] for r in READ.values() if r['shared']), default=None)
+_L_in = L_REF_CFG.get('in')
+if _P and _L_in and 'in' in SKIPPED:
+    print(f'  {"in":>3} bar:  c0 = {2.0*float(_L_in)/_P:.3f}   '
+          f'# from the striker pulse 2L/c = {_P*1e3:.1f} us; no gauge on it, '
+          'so nothing else')
+
+# --------------------------------------------------------------------------
+# hand the numbers on
+# --------------------------------------------------------------------------
+# The same split the simulators use: one script produces, another consumes, and
+# a file in between so that iterating on the reconstruction does not mean
+# re-running the identification. reconstruct_interface.py reads this.
+#
+# The TAPE positions travel with it and are kept SEPARATE from the identified
+# ones. They are two independent measurements of the same thing and the point
+# downstream is to run both and compare, not to have quietly chosen one here.
+IDENT_FILE = 'bar_identified.npz'
+_out = dict(case=CASE, bars=np.array(BARS))
+for b in BARS:
+    i = ID[b]
+    _out[f'c_{b}'] = i['c']
+    _out[f'x_{b}'] = i['x']
+    _out[f'L_free_{b}'] = i['L_free']
+    _out[f'L_ref_{b}'] = i['L_ref']
+    _out[f'R_{b}'] = i['R_MEAN']
+    _out[f'f1_{b}'] = READ[b]['f1']
+    _out[f'f2_{b}'] = READ[b]['f2']
+    _out[f'f3_{b}'] = READ[b]['f3']
+    if b in TAPE_POS:
+        _out[f'tape_{b}'] = np.asarray(TAPE_POS[b], float)
+    if ATT[b] is not None:
+        _out[f'alpha_f_{b}'], _out[f'alpha_{b}'] = ATT[b]
+np.savez(IDENT_FILE, **_out)
+print(f'\nwrote {IDENT_FILE}: '
+      + ', '.join(f'{b} c0={ID[b]["c"]:.1f}' for b in BARS)
+      + (', with alpha(f)' if any(ATT[b] is not None for b in BARS) else ''))
 
 # --------------------------------------------------------------------------
 # figure -- one column per bar, because the two are separate identifications
@@ -464,9 +698,10 @@ import matplotlib.pyplot as plt   # backend already chosen by plotting.init
 BLUE, ORANGE, INK, MUTED, GRID = '#2a78d6', '#eb6834', '#0b0b0b', '#52514e', '#d8d7d3'
 SURFACE = '#fcfcfb'
 
-fig, axes = plt.subplots(4, 2, figsize=(15, 13))
+fig, axes = plt.subplots(4, len(BARS), figsize=(7.5 * len(BARS), 13),
+                         squeeze=False)
 fig.patch.set_facecolor(SURFACE)
-for j in range(2):
+for j in range(len(BARS)):
     axes[1, j].sharex(axes[0, j])
     axes[3, j].sharex(axes[2, j])
 
@@ -474,10 +709,12 @@ for j, b in enumerate(BARS):
     r, i, nul = READ[b], ID[b], NULL[b]
     k = int(np.nanargmin(r['f1']))            # the gauge the wave reaches first
     title = f'{"Input" if b == "in" else "Output"} bar'
+    if EXPERIMENT:
+        title += ' (measured)'
 
     # --- the record, with the three edges the method uses ------------------
-    axes[0, j].plot(t, SIG[b][k] * 1e6, color=BLUE, lw=.9)
-    axes[0, j].set_ylabel('Strain (ustrain)')
+    axes[0, j].plot(t, SIG[b][k] * SCALE, color=BLUE, lw=.9)
+    axes[0, j].set_ylabel(f'Signal ({USYM})')
     axes[0, j].set_title(f'{title} — calibration shot at {NAMES[b][k]}, '
                          f'c = {i["c"]:.0f} mm/ms', loc='left', fontsize=11)
 
@@ -487,8 +724,8 @@ for j, b in enumerate(BARS):
     marks = [('f1  arrives', r['f1'][k], ORANGE),
              ('f2  free end', r['f2'][k], ORANGE),
              ('f3  round trip', r['f3'][k], BLUE)]
-    if r['shared'] is not None:
-        marks.append(('bars part', r['f1'][k] + r['shared'], MUTED))
+    for x, _ in r['shared']:
+        marks.append(('shared edge', r['f1'][k] + x, MUTED))
     for lab, tt, col in marks:
         if np.isfinite(tt):
             axes[1, j].axvline(tt, color=col, lw=1.1, ls='--')
@@ -503,29 +740,29 @@ for j, b in enumerate(BARS):
     axes[1, j].set_xlim(0, min(t[-1], r['f3'][k] * 1.25))
 
     # --- the free-end null, made visible -----------------------------------
-    axes[2, j].plot(t, nul['p'] * 1e6, color=BLUE, lw=.9,
+    axes[2, j].plot(t, nul['p'] * SCALE, color=BLUE, lw=.9,
                     label=r'$\varepsilon_+$ (toward the free end)')
-    axes[2, j].plot(t, nul['m'] * 1e6, color=ORANGE, lw=.9,
+    axes[2, j].plot(t, nul['m'] * SCALE, color=ORANGE, lw=.9,
                     label=r'$\varepsilon_-$ (reflected)')
-    axes[2, j].set_ylabel('Strain (ustrain)')
+    axes[2, j].set_ylabel(f'Signal ({USYM})')
     axes[2, j].set_title('Reconstructed AT the free surface — a free end '
                          'inverts, so these mirror', loc='left', fontsize=11)
     axes[2, j].legend(frameon=False, fontsize=9, labelcolor=MUTED,
                       loc='upper left')
     # headroom, so the legend sits above the traces rather than across them
-    _pk = max(np.abs(nul['p']).max(), np.abs(nul['m']).max()) * 1e6
+    _pk = max(np.abs(nul['p']).max(), np.abs(nul['m']).max()) * SCALE
     axes[2, j].set_ylim(-1.15 * _pk, 1.45 * _pk)
 
-    band = nul['tol'] * nul['amp'] * 1e6
+    band = nul['tol'] * nul['amp'] * SCALE
     axes[3, j].axhspan(-band, band, color=BLUE, alpha=.18,
                        label=f'threshold ±{nul["tol"]:.1e} × peak |ε₊|')
-    axes[3, j].plot(t, nul['tot'] * 1e6, color=INK, lw=.9,
+    axes[3, j].plot(t, nul['tot'] * SCALE, color=INK, lw=.9,
                     label=r'$\varepsilon_+ + \varepsilon_-$  (= stress / E)')
     axes[3, j].axhline(0, color=GRID, lw=.8)
     for _b in (t[nul['i0']], t[nul['i1']]):
         axes[3, j].axvline(_b, color=ORANGE, lw=1.1, ls='--')
     axes[3, j].set_xlabel('Time (ms)')
-    axes[3, j].set_ylabel('Strain (ustrain)')
+    axes[3, j].set_ylabel(f'Signal ({USYM})')
     axes[3, j].set_title(f'Free-surface stress — rms {nul["rms"]:.2e} of peak '
                          f'|ε₊|, '
                          f'{"PASS" if nul["rms"] <= nul["tol"] else "FAIL"}',
@@ -533,7 +770,7 @@ for j, b in enumerate(BARS):
     axes[3, j].legend(frameon=False, fontsize=9, labelcolor=MUTED,
                       loc='upper left')
     # Scale to the residual inside the window, not the truncation outside it.
-    _r = np.abs(nul['tot'][nul['w']]).max() * 1e6
+    _r = np.abs(nul['tot'][nul['w']]).max() * SCALE
     axes[3, j].set_ylim(-3 * _r, 3 * _r)
     axes[2, j].set_xlim(0, t[-1]); axes[3, j].set_xlim(0, t[-1])
 
@@ -546,12 +783,15 @@ for ax in axes.ravel():
     ax.xaxis.label.set_color(MUTED); ax.yaxis.label.set_color(MUTED)
     ax.title.set_color(INK)
 
-fig.suptitle('Direct-impact bar identified from a no-specimen calibration shot '
-             '— the two bars are independent problems',
+fig.suptitle('Direct-impact bar identified from a no-specimen calibration shot'
+             + (' — the two bars are independent problems' if len(BARS) > 1
+                else f' — {d["source"].rsplit("/", 1)[-1]}' if EXPERIMENT
+                else ''),
              x=.006, ha='left', fontsize=13, color=INK)
 fig.tight_layout(rect=(0, 0, 1, .975))
-fig.savefig('bar_identification_compression.png', dpi=140,
-            facecolor=fig.get_facecolor())
-print('\nwrote bar_identification_compression.png')
+FIG = (f'bar_identification_{CASE}.png' if EXPERIMENT
+       else 'bar_identification_compression.png')
+fig.savefig(FIG, dpi=140, facecolor=fig.get_facecolor())
+print(f'\nwrote {FIG}')
 
 plotting.show_unless(HEADLESS)

@@ -27,10 +27,18 @@ tomllib is in the standard library from Python 3.11, so this adds no dependency.
 import os
 import tomllib
 
-__all__ = ['load', 'bar_lengths', 'CASES', 'BAR_TABLES', 'DEFAULT_PATH']
+__all__ = ['load', 'bar_lengths', 'CASES', 'EXPERIMENT_CASES', 'BAR_TABLES',
+           'DEFAULT_PATH']
+
+# Cases that describe a MEASURED shot rather than one to be simulated. They
+# carry a file to read and the geometry needed to interpret it, and none of the
+# simulator's tables -- no mesh, no striker, no material to integrate, because
+# the bar already did the integrating. _validate skips those checks for them
+# and keeps the ones that still mean something.
+EXPERIMENT_CASES = ('experiment_pc_bar',)
 
 CASES = ('compression', 'calibration_compression',
-         'tension', 'calibration_tension')
+         'tension', 'calibration_tension') + EXPERIMENT_CASES
 
 # Cases that run through simulate_tension.py and therefore need a striker and
 # an anvil table as well as a bar and a specimen.
@@ -52,8 +60,9 @@ def load(case, path=DEFAULT_PATH):
     Parameters
     ----------
     case : one of CASES
-        Which setup to read: 'compression', 'tension' or
-        'calibration_tension'.
+        Which setup to read: a simulated case ('compression', 'tension',
+        'calibration_compression', 'calibration_tension') or one of
+        EXPERIMENT_CASES, which describes a measured shot instead.
     path : str
         Location of the TOML file. Defaults to config.toml beside this module,
         so the scripts work regardless of the current working directory.
@@ -75,7 +84,9 @@ def load(case, path=DEFAULT_PATH):
             raise KeyError(f'{path}: missing [{section}] section')
 
     cfg = dict(raw[case])
-    # shared numerics, overridden per case where the case says so
+    # shared numerics, overridden per case where the case says so. An experiment
+    # case has nothing to integrate, but the merge is harmless and keeps every
+    # loaded case the same shape.
     numerics = dict(raw['numerics'])
     numerics.update(cfg.get('numerics', {}))
     cfg['numerics'] = numerics
@@ -103,6 +114,10 @@ def _validate(cfg, case, path):
 
     if cfg.get('loading') not in ('compression', 'tension'):
         raise ValueError(f"{where}: loading must be 'compression' or 'tension'")
+
+    if case in EXPERIMENT_CASES:
+        _validate_experiment(cfg, where)
+        return
 
     for key in [table for table, _ in BAR_TABLES] + ['specimen']:
         if key not in cfg:
@@ -143,3 +158,55 @@ def _validate(cfg, case, path):
             raise ValueError(
                 f'{where}: gauge at {max(gauges)} mm does not fit on the '
                 f'{side} bar ({length} mm)')
+
+
+def _validate_experiment(cfg, where):
+    """
+    The subset of _validate that still means something for a measured shot.
+
+    Gone: the bar/specimen/striker tables, the mesh and the timestep -- there is
+    nothing to integrate. Kept: the sign convention, eta, and the gauge list,
+    because those reach `separate` exactly as they do for a simulated case.
+
+    NOTE the gauge list here is TAPE, not truth. identify_bar_compression.py is
+    never told it; reconstruct_interface.py uses it as one of the two position
+    sets it compares. It is validated so that a typo fails here rather than
+    inside an FFT.
+    """
+    if cfg['analysis']['eta'] <= 0:
+        raise ValueError(f'{where}: eta must be > 0 (separate() is singular '
+                         'at DC for eta = 0)')
+
+    for key in ('file', 'columns', 'bar'):
+        if key not in cfg:
+            raise KeyError(f'{where}: missing "{key}"')
+
+    cols = cfg['columns']
+    if 'time' not in cols:
+        raise KeyError(f'{where}: [.columns] must name a "time" column index')
+    gauge_cols = [k for k in cols if k != 'time']
+    if not gauge_cols:
+        raise KeyError(f'{where}: [.columns] names no gauge channels')
+    if len(set(cols.values())) != len(cols):
+        raise ValueError(f'{where}: two channels share a column index: {cols}')
+
+    bar = cfg['bar']
+    for key in ('length', 'diameter'):
+        if key not in bar:
+            raise KeyError(f'{where}: missing [.bar].{key}')
+        if bar[key] <= 0:
+            raise ValueError(f'{where}: [.bar].{key} must be > 0')
+
+    gauges = cfg.get('gauges')
+    if not gauges:
+        raise KeyError(f'{where}: missing or empty "gauges" (tape positions)')
+    if len(gauges) != len(gauge_cols):
+        raise ValueError(f'{where}: {len(gauges)} tape positions but '
+                         f'{len(gauge_cols)} gauge channels in [.columns]')
+    if any(g <= 0 for g in gauges):
+        raise ValueError(f'{where}: gauge distances must be > 0; got {gauges}')
+    if len(set(gauges)) != len(gauges):
+        raise ValueError(f'{where}: gauge distances must be distinct; got {gauges}')
+    if max(gauges) >= bar['length']:
+        raise ValueError(f'{where}: gauge at {max(gauges)} mm does not fit on a '
+                         f'{bar["length"]} mm bar')

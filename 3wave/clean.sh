@@ -43,6 +43,16 @@ GENERATED=(
     "bar_identification_tension.png"
     # figure written by identify_bar_compression.py
     "bar_identification_compression.png"
+    # same script run on a MEASURED shot: --experiment <case>
+    "bar_identification_experiment_pc_bar.png"
+    # the identified numbers, handed from identify_bar_compression.py to
+    # reconstruct_interface.py the way dump.npz is handed from a driver
+    "bar_identified.npz"
+    # written by reconstruct_interface.py, with and without --no-attenuation
+    "interface_force.png"
+    "interface_force.dat"
+    "interface_force_lossless.png"
+    "interface_force_lossless.dat"
     # figure written by lagrange_diagram.py
     "lagrange_diagram.png"
     # legacy outputs of the unmodified simulate_compression.py, in case an older copy is run

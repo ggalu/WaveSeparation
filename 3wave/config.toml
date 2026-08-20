@@ -363,3 +363,89 @@ rho = 2.81e-6                     # impedance change, deliberately neglected
 JC_A = 1.0e3                      # yield stress far above anything reachable,
 JC_B = 0.0                        # so the joint stays elastic and linear
 JC_n = 1.0
+
+# ==========================================================================
+# EXPERIMENT: a MEASURED shot, not a simulated one.
+#
+# Everything above describes a model to be integrated. This describes a file to
+# be read. There is no mesh, no striker table and no material to step forward --
+# the bar already did that -- so config.py validates this family through
+# _validate_experiment() and skips the simulator's checks.
+#
+#   python3 identify_bar_compression.py --experiment experiment_pc_bar
+#   python3 identify_attenuation.py
+#   python3 reconstruct_interface.py
+#
+# THE ONE THING TO UNDERSTAND ABOUT THIS CASE: the file holds FORCE in kN, not
+# strain. That is fine and nothing has to convert it. `separate` is linear and
+# takes "strain, or any quantity proportional to it -- force, volts", so P and M
+# come back in kN and F = P + M is the interface force directly. E and A never
+# enter the reconstruction at all; only c, the positions and eta do.
+# ==========================================================================
+[experiment_pc_bar]
+loading = "compression"           # compression POSITIVE in this file, unlike
+                                  # the simulators' compression-negative strain
+file = "data/PC_bar_calibration.txt"
+
+# TAPE positions of the two gauges, from the impact face. The identification is
+# NEVER told these -- it recovers them, and reconstruct_interface.py then runs
+# the reconstruction with both sets side by side so the difference is measured
+# rather than assumed.
+gauges = [118.0, 489.0]
+
+# THE measured length: the output bar, impact face -> free end. One bar is
+# instrumented, so one length closes the scale degeneracy
+# (lengths, c) -> (lambda lengths, lambda c). The input bar has no gauge and is
+# not identified; only its own c falls out, from the striker pulse length.
+L_free_out_ref = 1027.0
+L_free_ref_tol = 2.0
+
+# The input bar, which is also the striker: 2415 mm of 7075 aluminium fired
+# straight at the output bar's face. Not instrumented. Its length is here only
+# so that c_in = 2 L / P can be reported from the measured pulse length P.
+L_free_in_ref = 2415.0
+
+# Column indices, 0-based. The file's 4th column is the average of the two and
+# is deliberately not named here.
+[experiment_pc_bar.columns]
+time = 0                          # microseconds; the loader converts to ms
+"out-0" = 1                       # force [kN] at the gauge nearer the impact
+"out-1" = 2
+
+[experiment_pc_bar.bar]
+length = 1027.0                   # the instrumented (output) bar [mm]
+diameter = 16.7
+rho = 1.2e-6                      # polycarbonate [kg/mm^3]. NOT identifiable
+                                  # from the record -- it is here to close
+                                  # E = rho c^2, which is a by-product and not
+                                  # a measurement. Weighing the bar is what
+                                  # would actually close it.
+
+[experiment_pc_bar.trim]
+# `separate` needs the signals quiescent at t[0], and the raw file carries
+# 1638 us of pre-trigger baseline before the shot. The loader finds the first
+# arrival, keeps `lead` microseconds ahead of it and re-zeros t.
+threshold = 0.05                  # fraction of peak that counts as "arrived"
+lead = 50.0                       # us of quiet kept ahead of the arrival
+baseline = true                   # subtract each channel's pre-trigger mean
+
+[experiment_pc_bar.attenuation]
+# Polycarbonate is VISCOELASTIC and this is the case that needs it. Band over
+# which alpha(f) is fitted from the two-gauge spectral ratio. f_hi is also the
+# BAND LIMIT: identify_attenuation.py emits an (freq, alpha) table ending here,
+# and np.interp holds that last value above it, so the de-attenuation stops
+# growing. Raising f_hi past where the record has energy buys nothing and
+# amplifies noise -- see `attenuation` in wave_separation.separate.
+f_lo = 2.0                        # kHz
+f_hi = 50.0                       # kHz
+snr = 0.01                        # keep bins whose |F1| is above this fraction
+                                  # of the spectral peak
+
+[experiment_pc_bar.null]
+# Free-end null test, as in the calibration cases. The floor here is set by how
+# well the viscoelastic model fits, not by a mesh, so it must be re-measured
+# rather than inherited from [calibration_compression]. Measured on this record:
+#   elastic (alpha = 0)          8.96e-2
+#   alpha = 5.65e-5 f, capped    4.83e-2
+window = 0.75
+tol = 6.0e-2

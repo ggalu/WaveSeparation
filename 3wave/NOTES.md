@@ -31,10 +31,24 @@ repeated here; this file is only for what those do not record.
   contact plane, and the unilateral condition goes on ONE face rather than two —
   clipping both would stop the output bar carrying the tensile wave its own free
   end sends back, 1 mm inside the bar and for no physical reason.
-- **No loader for real experimental data yet**, by explicit decision. `--l-free-ref`
-  is the conceptually load-bearing half of rig readiness; the other half is a
-  loader that builds the dump dict from scope traces, since `eps_in`/`dt`/`N`
-  are real on a rig but `pos_in` is not.
+- ~~**No loader for real experimental data yet**, by explicit decision.~~
+  **Done 2026-08-20**, driven by `data/PC_bar_calibration.txt` — a real
+  direct-impact shot into a polycarbonate bar. `experiment.py` builds the dump
+  dict from a text record; `[experiment_pc_bar]` in `config.toml` holds the
+  column map and the geometry; `config.py` validates that family through
+  `_validate_experiment`, which drops the simulator-only tables.
+  `identify_bar_compression.py --experiment CASE` runs on it unchanged in
+  method. The keys a rig cannot supply — `c0_*`, `E_*`, `force_iface_*`,
+  `spec_*` — are ABSENT rather than guessed, and that absence is what makes the
+  true/error columns print a dash instead of quietly comparing against an input.
+  See "Identifying a real, viscoelastic bar" in `README.md`.
+
+- **`separate` grew an `attenuation` argument**, and polycarbonate is why. The
+  complex wavenumber is `xi = (w - i eta)/c_p(f) - i alpha(f)`; `dispersion`
+  keeps its old meaning (real `c_p`) and every simulated case is bit-identical
+  at `attenuation=None`. `identify_attenuation.py` measures `alpha(f)` from the
+  two-gauge transfer function — MAGNITUDES ONLY, never from a boundary
+  condition, so the free-end null stays an independent check of it.
 
 ## Open threads
 
@@ -100,7 +114,73 @@ repeated here; this file is only for what those do not record.
    at an effective Courant number of 0.22 and disperse. A per-material timestep,
    or simply a finer mesh in the slow bar, would fix it. Not attempted.
 
+7. **The +9 mm common position offset on the PC shot is not fully explained.**
+   The identification recovers `D` to +0.88 mm but puts both gauges ~9 mm
+   further from the impact face than the tape does. The attribution in
+   `README.md` is the contact-end reflection at `2L/c`: the aluminium bar is
+   still in contact there (its round trip is 944 us against the PC bar's 1460),
+   so that reflection is not an ideal free surface and `f3` runs ~15 us late at
+   every gauge alike. **Edge broadening over the extra `2x` of travel would also
+   produce a positive offset**, and this record cannot separate the two — the
+   broadening explanation predicts an offset ~4x larger at out-1 than at out-0
+   and the measured ones are nearly equal (+8.55 / +9.42), which argues for the
+   contact-end reflection, but not conclusively. **A shot with a SHORT striker
+   settles it**: the bars then part long before `2L/c`, the contact end is a
+   genuine free surface, and the offset should vanish. Worth one shot.
+
+8. **`L = 1027 mm` was given as approximate and everything scales with it.**
+   `(lengths, c) -> (lambda lengths, lambda c)` leaves the record invariant, so
+   the identified `c`, `D` and positions all carry that error proportionally,
+   and the free-end null is blind to it by construction. Nothing in the
+   reconstruction is wrong because of it -- `separate` consumes transit times --
+   but any absolute `c` or `E` quoted from this shot inherits it. Re-measure the
+   bar.
+
+9. **`alpha(f)` rests on one gauge pair.** Two gauges give one transfer
+   function, so the fit has no redundancy and no way to tell material
+   attenuation from anything else that broadens an edge with distance --
+   Pochhammer-Chree dispersion in a 16.7 mm bar, or gauge-length averaging. A
+   third gauge would give three pairs over three different baselines, and a
+   disagreement between them would be the diagnostic. `fit_attenuation` already
+   loops over all pairs; it just only has one here.
+
 ## Traps worth not rediscovering
+
+- **The boundary conditions cannot pin `alpha`, only demand it.** Fitting
+  `alpha` by minimizing the free-end null, or the tensile violation, or the
+  post-separation residual, was tried and does not work: ALL of them improve
+  monotonically as `alpha` is raised, with no minimum, because more damping
+  quietly suppresses everything. They establish that `alpha > 0` is needed
+  (0.124 tensile violation against 0.038) and they cannot choose its value. So
+  `alpha` is measured from gauge magnitudes and the boundary conditions are left
+  to validate it -- which is also the only way that validation means anything.
+
+- **De-attenuation must be band-limited, and the failure looks like success.**
+  The minus branch carries `exp(+alpha x)`. Let `alpha = k f` run to Nyquist and
+  it overflows; stop just short and the free-end null residual reads ~15x BETTER
+  than the truth, built entirely on amplified noise. The `(freq, alpha)` table
+  form is its own band limit -- `np.interp` holds the endpoint value -- and
+  `_pm_spectra` raises on the overflow case. The quiet case is the dangerous one.
+
+- **A causality check needs the ECHO's rise, not a fixed clearance.** `M` must
+  be zero at the contact until `2L/c`, but on the PC bar the echo has crossed
+  2054 mm of lossy material and its 10-90 rise at the contact is 369 us. Scoring
+  the check right up to `2L/c` reads 0.198 -- all of it the edge the check is
+  waiting for. Measured from `M` itself it reads 0.050.
+
+- **`c * lag` is not `D` in a lossy bar.** The far gauge sees a broader edge, so
+  its correlation peak lands later and the arrival-lag route reads long: 374.86
+  against 371.88 mm on the PC shot, where `f3 - f2` gives +0.88 mm against the
+  tape. Both features of `f3 - f2` travelled the same path to the same gauge, so
+  the bias cancels. It is ~1 us even on the simulated bars, from the lumped
+  chain's numerical dispersion.
+
+- **One shared edge is not always all of them.** The shared-delay detector used
+  to find the single common event (the bars parting) and stop. A LONG striker --
+  2415 mm of aluminium, 944 us round trip, against a 1027 mm bar -- is still in
+  contact when the echo returns and puts shared edges at 944 and 1424 us. The
+  second one survived the old detector and competed with the real echo on
+  amplitude; it lost, but by luck. The detection is a loop now.
 
 - **The free-end null must be windowed.** Over the full record it reads 1.2e-01,
   ~100× its true value, because the exponential window amplifies record-end

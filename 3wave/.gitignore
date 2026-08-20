@@ -12,8 +12,12 @@ __pycache__/
 *.pyc
 
 dump.npz
+bar_identified.npz
 specimen.dat
 specimen_reconstructed.dat
+interface_force.dat
+interface_force_lossless.dat
+interface_force_lossless.png
 
 # superseded output formats, in case an older revision is ever run here
 eps.npy

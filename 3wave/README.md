@@ -47,6 +47,7 @@ way to reach `[calibration_tension]` through it.
 | SHTB with a specimen | `python3 drive_tension.py` | `simulate_tension.py` |
 | connected-bar calibration shot | `python3 drive_calibration_tension.py` | `simulate_tension.py` |
 | direct-impact calibration shot | `python3 drive_calibration_compression.py` | `simulate_compression.py` |
+| a MEASURED shot | nothing — `identify_bar_compression.py --experiment CASE` reads the file itself | any driver |
 
 The drivers are three lines each and set nothing themselves; they pick a case out
 of `config.toml`, run the model and write the dump. The simulators are kept
@@ -116,6 +117,17 @@ python3 sep_test.py          # separation accuracy vs ground truth, eta sweep
 `reduce_specimen.py` prints the validation and writes `specimen_reconstructed.dat`
 (time, stress, strain, strain rate — compression positive) plus a three-panel
 figure.
+
+And a **measured** shot, rather than a simulated one:
+
+```bash
+python3 identify_bar_compression.py --experiment experiment_pc_bar
+python3 reconstruct_interface.py     # -> force at the impact interface
+```
+
+See [Identifying a real, viscoelastic
+bar](#identifying-a-real-viscoelastic-bar). That path needs no simulator: it
+reads `data/PC_bar_calibration.txt` through `experiment.py`.
 
 To remove every generated file and start clean:
 
@@ -642,6 +654,19 @@ The three parameters to get right for a different setup:
 For the real `a05` experiment you would additionally pass
 `dispersion=(f, cp_over_c0)` from `Results_Raw/pochhammer.mat`, and use
 `eta ≈ 500` because `t` is in seconds there rather than milliseconds.
+
+Two more things a real record needs, both covered in [Identifying a real,
+viscoelastic bar](#identifying-a-real-viscoelastic-bar):
+
+- **`signals` need not be strain.** `separate` is linear, so force or volts in
+  gives the same units out. Feed it kN and `P + M` is the interface force
+  directly, with `E` and `A` entering nowhere.
+- **`attenuation=(f, alpha)`** for a lossy bar, `α` in 1/length. Metal does not
+  need it; polycarbonate does — without it the free-end null will not go below
+  9e-02 and the reconstructed contact force goes 12 % of peak tensile. Pass the
+  table form: `np.interp` holds its endpoint value beyond the table, and that
+  flat top is the band limit that keeps `exp(+αx)` from amplifying noise without
+  bound.
 
 ## Choosing eta
 
@@ -1201,6 +1226,326 @@ The test is scale-invariant, verified: scaling `L_free` and `c` together by
 `L_free/c` and nothing else — which is exactly what `separate` consumes, and
 exactly what the tape cannot fix.
 
+## Identifying a real, viscoelastic bar
+
+Everything above identifies a bar from `dump.npz`, written by a simulator. This
+section does it from a **measured** shot, and the bar is polycarbonate — which
+turns out to be the interesting part.
+
+```bash
+python3 identify_bar_compression.py --experiment experiment_pc_bar   # ~2 s
+python3 reconstruct_interface.py                                     # ~2 s
+```
+
+The record is `data/PC_bar_calibration.txt`: a 2415 mm ⌀16 mm 7075 aluminium bar
+fired straight at a 1027 mm ⌀16.7 mm PC bar, no specimen. Only the PC bar is
+instrumented — two gauges, tape-measured at 118 and 489 mm from the impact face —
+and the columns are **force in kN**, not strain. The deliverable is the force at
+the impact interface, where no gauge can go.
+
+`[experiment_pc_bar]` in `config.toml` holds the file, the column map, the bar,
+and the one measured length. `config.py` validates that family through
+`_validate_experiment`, which keeps the checks that still mean something
+(`loading`, `eta`, the gauge list) and drops the simulator's mesh, striker and
+specimen tables. `experiment.py` reads it into the same dict shape `load_dump`
+produces, so nothing downstream had to learn a second format.
+
+### Force in, force out: E·A never enters
+
+`separate` is linear and takes "strain, or any quantity proportional to it —
+force, volts". Feed it kN and `P` and `M` come back in kN, so
+
+```math
+F_\text{interface}(t) = P(t) + M(t)
+```
+
+is the contact force outright. **`E`, `A` and `ρ` appear nowhere in the
+reconstruction** — only `c0`, the gauge positions and `eta` do, and those are
+exactly what the calibration shot measures. That is worth knowing, because `E`
+and `A` are the numbers a rig knows worst. `E = ρc²` is still printed, but as a
+closure against an assumed handbook `ρ`, and it is labelled as one.
+
+### What a real record needs that a simulated one does not
+
+Three things, all handled in `experiment.py` and all of which break something if
+left alone:
+
+- a **pre-trigger baseline** — this file starts 1638 µs before the shot.
+  `separate` needs the signals quiescent at `t[0]`, and `_rise_time` takes a
+  global `argmax`, so the edge-template width is meaningless with the noise
+  floor in the running. The loader trims to 50 µs ahead of the first arrival and
+  re-zeros `t`;
+- a **DC offset** per channel, from the amplifier rather than the bar;
+- **no ground truth.** Those keys are absent rather than guessed, which is what
+  lets the identification print a dash instead of a fabricated error column. The
+  tape positions travel separately and are never shown to the identification.
+
+`identify_bar_compression.py` also stopped assuming two instrumented bars: it
+now takes `BARS` from the record — a bar needs two gauges before `separate` has
+two equations — and says which it skipped and why.
+
+### The identification transfers essentially intact
+
+| feature | out-0 | out-1 | |
+|---|---|---|---|
+| `f1` arrival | 0.0370 ms | 0.3035 ms | lag 266.5 µs |
+| `f2` free-end echo, delay | 1279.9 µs | 752.2 µs | strongest negative edge |
+| `f3` round trip `2L/c`, delay | **1459.9** | **1461.0** | **spread 1.09 µs = 7.5e-04** |
+
+`R = 2L/c` agreeing to 7.5e-04 across two gauges is the check this script was
+built around, and it survives contact with a real bar. With `L_free_out_ref =
+1027 mm`:
+
+| quantity | identified | tape | error |
+|---|---|---|---|
+| `c` (PC) | 1406.45 mm/ms | — | — |
+| out-0 / out-1 | 126.55 / 498.42 mm | 118 / 489 | **+8.55 / +9.42 mm** |
+| `D` | **371.88 mm** | 371.00 | **+0.88 mm (+2.4e-03)** |
+| `E = ρc²` at ρ = 1.2e-6 | 2.374 GPa | — | closure, not a measurement |
+| `c` (input bar, from the striker pulse) | 5115.6 mm/ms | — | by-product |
+
+The last row is free: the shared edge every gauge sees is the striker's own
+release returning, so its delay is `2 L_striker / c_striker`. The bar carries no
+gauge and cannot be separated, but its wave speed falls out anyway, and 5116
+mm/ms for 7075 is a check on the whole time base.
+
+**The +9 mm is a common offset, not a spacing error.** `f3` runs ~15 µs late at
+*both* gauges because the contact-end reflection at `2L/c` is not an ideal free
+surface — the aluminium bar is still in contact there, its own round trip being
+944 µs against the PC bar's 1460. Per [Know the spacing, rather than choose
+it](#know-the-spacing-rather-than-choose-it) that is the benign kind, and
+[Two position sets](#two-position-sets-side-by-side) measures the claim instead
+of repeating it.
+
+### Two traps this record found
+
+**A long striker puts more than one shared edge in the record.** The detector
+used to find the single delay shared by every gauge — the bars parting — and
+stop. Here the striker is still in contact when the echo returns, so its
+unloading staircase contributes a shared edge at 944.2 µs *and* another at
+1424.1 µs. Finding one and stopping leaves the other competing with the real
+echo on amplitude; it happens to lose here (0.14 against 0.30) but that is luck.
+The detection is now a loop and reports every shared edge it removes.
+
+**Do not take `D` from the gauge-to-gauge lag.** `c · lag` reads 374.86 mm, off
+by +3.9 mm, because the arrival edge broadens as it propagates and the
+correlation peak drifts later the further it has gone. `f3 − f2` compares two
+features that travelled the *same* path to the *same* gauge, so the bias
+cancels: +0.88 mm. Both routes are now printed with their difference, which is a
+measurement of the broadening rather than a fault — it reads ~1 µs even on the
+simulated bars, from the lumped chain's own numerical dispersion.
+
+### The bar is viscoelastic, and that is the whole story
+
+The leading edge broadens from **20 µs to 34 µs** over the 371 mm between the
+gauges, and the plateau loses 3.5 %. `separate` fits one pair of waves to *all*
+the gauges at once, and with a lossless model it cannot satisfy two gauges that
+disagree about the wave's shape. The residual has to go somewhere, and it goes
+into the answer.
+
+`wave_separation.py` gained an `attenuation` argument for this — a complex
+wavenumber,
+
+```math
+\xi = \frac{\omega - i\eta}{c_p(f)} - i\,\alpha(f)
+```
+
+so the `+` wave carries `exp(-i ξ x) = exp(-iωx/c_p) exp(-αx)`, decaying away
+from the interface, and the `−` wave carries `exp(+αx)` — correct, because a
+wave heading *toward* the interface was larger further out. `dispersion` keeps
+its old meaning (real `c_p`) and every simulated case is bit-identical with
+`attenuation=None`.
+
+`identify_attenuation.py` measures `α(f)` from the two gauges themselves. Over a
+window where only one wave is present, the two records differ by a known
+distance and nothing else, so their ratio is `exp(-iω Δx/c_p) exp(-α Δx)`:
+magnitude gives `α`, phase gives `c_p`. Three details make that work on a real
+record —
+
+- **differentiate first.** The record is a long step whose spectrum is almost
+  all DC; its derivative is the edge, broadband and starting and ending near
+  zero. `d/dt` is `iω` on both sides and cancels out of the ratio exactly. Same
+  reason the identification times edges rather than pulses;
+- **de-lag to the sub-sample.** Each window is cut at the integer sample nearest
+  its own arrival and the remainder applied as a phase;
+- **band the answer.** Bin by bin the ratio is unusable — neighbouring bins land
+  above and below unity. Averaging `−ln|H|` over 4 kHz bands, weighted by where
+  the near gauge has energy, is what makes it a curve.
+
+Measured on this record: `α` = 1.26e-03 /mm at 10 kHz, 1.95e-03 at 25 kHz,
+4.06e-03 at 50 kHz, or `α ≈ 9.2e-05·f` [1/mm, f in kHz] as a one-number summary
+— a roughly linear law, i.e. a roughly constant loss angle, which is what a
+polymer does. The far gauge predicted from the near one goes from **0.418 to
+0.235** relative L2. The transfer-function *phase* gives `c_p = 1394.2 mm/ms`,
+an independent look at the 1406.5 the round trip gives.
+
+**The band limit is not optional.** The `−` branch carries `exp(+αx)`, which
+grows without bound with frequency: taken to Nyquist it overflows outright, and
+just short of that it produces a free-end null residual ~15× better than the
+truth, built entirely on amplified noise. The table form is its own band limit —
+`np.interp` holds the endpoint value above `f_hi` — and `_pm_spectra` raises
+rather than overflow. The quiet case is the dangerous one.
+
+### Four checks, and three of them consume no ground truth
+
+A simulated shot is checked against the simulator. A real one can only be
+checked against itself — but this rig offers three boundary conditions that hold
+whatever the bar is made of, and they are independent of the free end because
+they live on the *other* boundary:
+
+| check | what it asserts | lossless | with α(f) |
+|---|---|---|---|
+| free-end null | `ε₊ + ε₋ = 0` at the far surface | 8.22e-02 | **3.53e-02** |
+| causality | `M ≈ 0` at the contact for `t < 2L/c` | 0.164 | **0.050** |
+| unilateral contact | `F ≥ 0` — a contact cannot pull | 0.124 | **0.038** |
+| separation | `F → 0` once the tensile echo arrives | 0.087 | **0.047** |
+
+All four improve by 2–3×, and **α was fitted to none of them** — it comes from
+gauge magnitudes alone. That is what makes this evidence rather than
+curve-fitting, and it is why `identify_attenuation.py` deliberately does *not*
+tune α on the boundary conditions. Tried, and it does not work: raise α and all
+of them keep improving monotonically with no minimum, because more damping
+quietly suppresses everything. They establish that α > 0 is needed; they cannot
+pin its value.
+
+The causality window needs one measured quantity of its own. The echo has
+crossed `2L` = 2054 mm of lossy bar by the time it reaches the contact and its
+10–90 rise is **369 µs**, so a clearance shorter than that scores the check
+against the very edge it is waiting for — 0.198 instead of 0.050. The clearance
+is taken from `M` itself rather than picked.
+
+### Two position sets, side by side
+
+`reconstruct_interface.py` runs both, because on this shot they differ:
+
+| positions | `D` | peak `F` | free-end null | causality | tensile | after separation |
+|---|---|---|---|---|---|---|
+| identified | 371.88 | 1.382 kN | 3.53e-02 | 0.050 | 0.038 | 0.047 |
+| tape | 371.00 | 1.396 kN | 3.57e-02 | 0.052 | 0.038 | 0.044 |
+
+A common **+8.99 mm** offset moves the peak by **1.0 %** and the whole history by
+1.7e-02 relative L2. That is the measurement behind [A consequence worth
+knowing](#a-consequence-worth-knowing)'s claim that `D` is the physical
+parameter and the individual `x` is not — and it is why the identification is
+worth running even where a tape reading exists: it recovers `c0`, which no tape
+can, and confirms `D` to 0.88 mm.
+
+### What the reconstruction says happened
+
+![Force at the impact interface](interface_force.png)
+
+Unprompted, and none of it built in:
+
+- the contact force rises to a plateau of **1.30 kN** (peak 1.38) and holds;
+- it steps down to **0.97 kN** at 944 µs, one striker round trip in, as the
+  aluminium bar's own release returns — **it does not go to zero**, and the next
+  subsection is why;
+- `M` is flat zero until the free-end echo reaches the contact at
+  `2L/c` = 1460 µs;
+- that echo is **tensile**, a contact cannot carry it, and `F` drops to zero and
+  stays there. The bars have parted.
+
+`identify_bar_compression.py` writes `bar_identified.npz` and
+`reconstruct_interface.py` reads it — the same producer/consumer split the
+simulators use, so iterating on the reconstruction does not mean re-running the
+identification. The reconstruction also writes `interface_force.dat`
+(time, F, P, M). `--no-attenuation` reproduces the lossless column above.
+
+### Why the force does not go to zero when the striker unloads
+
+The step at 944 µs takes the contact force from 1.30 kN to 0.97 kN and no
+further. That surprises people, because the picture everyone carries is of a
+striker producing a rectangular pulse that ends after one round trip. **That
+picture is the impedance-matched special case**, and this rig is nowhere near
+it: the aluminium bar is 7.8× the impedance of the polycarbonate one.
+
+For a striker of impedance $Z_1$ hitting a bar of impedance $Z_2$, the contact
+force is a geometric staircase, one step per striker round trip
+$P = 2L_1/c_1$:
+
+```math
+F_n = F_0\,r^n,
+\qquad r = \frac{Z_1 - Z_2}{Z_1 + Z_2},
+\qquad F_0 = \frac{Z_1 Z_2}{Z_1 + Z_2}\,V
+```
+
+Everything in it is either identified above or a handbook density:
+
+| | value [kN/(mm/ms)] |
+|---|---|
+| $Z_{Al} = \rho c A$, at $\rho$ = 2.81e-6, `c` = 5115.6 (identified), ⌀16 | 2.890 |
+| $Z_{PC}$, at $\rho$ = 1.2e-6, `c` = 1406.45 (identified), ⌀16.7 | 0.3697 |
+| impedance ratio | **7.82** |
+| $r$ | **0.773** |
+| predicted step at 944 µs | 1.300 → **1.005 kN** |
+| **measured** | 1.300 → **0.968 kN**, ratio **0.744** |
+
+Within 4 % of theory, on a number that comes straight out of the record. The
+three regimes are worth holding together, because only one of them is the
+textbook picture:
+
+| | $r$ | what happens at $t = P$ |
+|---|---|---|
+| $Z_1 = Z_2$, matched | 0 | force goes to zero: one rectangular pulse of length `P` |
+| $Z_1 < Z_2$, soft striker on stiff bar | < 0 | force would reverse sign, so the contact **opens** and the pulse really does end |
+| $Z_1 > Z_2$, **this rig** | > 0 | force **decays but stays compressive**; contact stays closed for many round trips |
+
+The physical statement is about momentum, not waves. At $t = P$ the release wave
+has made one round trip of the striker and taken away only part of its momentum:
+the striker velocity behind that wave is $2v_1 - V = 0.773\,V$. **It is still
+travelling at 77 % of its impact velocity, still moving toward the PC bar, still
+in contact, still transmitting.** A soft bar cannot absorb a stiff bar's
+momentum in one transit. The same 0.773 appears in the velocity and in the force
+because the contact force is set by the remaining approach velocity.
+
+Inverting $F_0$ gives the impact velocity as a by-product: **3.97 m/s**.
+
+**The second step never arrives.** It would land at $2P$ = 1888 µs, at
+$r^2 F_0$ ≈ 0.78 kN. But the PC bar's own round trip is 1460 µs — *shorter* —
+so the free-end echo gets back first, arrives tensile, and the bars part. On
+this rig the output bar terminates the loading before the striker does. That is
+also why [the shared-edge detector had to become a
+loop](#two-traps-this-record-found): a striker that is still in contact when the
+echo returns leaves its staircase edges in the record alongside the echo.
+
+### The ramp before the echo is the echo
+
+Between ~1200 and ~1400 µs the force declines from 0.97 to about 0.83 kN. It
+looks like a second staircase step and it is not — $2P$ is 1888 µs, and nothing
+from the PC bar can return before 1460. Splitting `interface_force.dat` into its
+two waves settles it:
+
+| t [µs] | `P` | `M` | `F = P + M` |
+|---|---|---|---|
+| 1150 | 1.059 | −0.073 | 0.987 |
+| 1250 | 0.967 | −0.089 | 0.877 |
+| 1350 | 0.939 | −0.202 | 0.738 |
+| 1400 | 0.799 | −0.527 | 0.271 |
+| 1450 | 1.006 | −0.958 | 0.048 |
+
+`P` is flat across it. The whole decline is `M` going negative — the free-end
+echo, already arriving. Its 10–90 rise at the contact measures **369 µs** after
+crossing `2L` = 2054 mm of lossy polycarbonate, so its foot starts around
+1150 µs even though the nominal arrival is 1460. **The drop is not a step at
+1460, it is a ramp centred on it.** That same 369 µs is what the causality check
+has to hold clear of, per [Four checks](#four-checks-and-three-of-them-consume-no-ground-truth).
+
+After separation the two waves mirror each other: averaged over 1600–2000 µs,
+`P` = +1.35 and `M` = −1.33, for `F` = 0.016 kN. The contact face is now a free
+surface and satisfies the same null condition the far end does — which nothing
+imposed, since `separate` is never told about boundaries at all.
+
+### What this record cannot settle
+
+`c` and the positions rest on `L = 1027 mm`, which was given as approximate; the
+scale degeneracy `(lengths, c) → (λ·lengths, λ·c)` means every length and `c`
+carry that error proportionally, and the free-end null is blind to it by
+construction. And the +9 mm common offset is attributed to the contact-end
+reflection, but edge broadening over the extra `2x` of travel would also produce
+a positive offset. **A second shot with a short striker separates the two** —
+with every echo isolated and the bars parted long before `2L/c`, the contact-end
+reflection is a genuine free surface and the offset should vanish.
+
 ## Accuracy and time integration
 
 Both simulators use explicit leapfrog on a lumped mass-spring chain. That is a
@@ -1313,9 +1658,9 @@ specimen reduction, which is what the floor is actually made of.
 
 | File | Purpose |
 |---|---|
-| `wave_separation.py` | **The library — use this one.** `separate`, `separate_field`, `backpropagate`, `bar_interface`, `specimen_response`, `conditioning`, `single_wave_window`. numpy only. |
-| `config.toml` | **All parameters, both cases** — materials, geometry, gauge locations, numerics, `eta`, and the calibration's `L_free_ref`. |
-| `config.py` | Reads and validates `config.toml`. stdlib `tomllib`, no dependency. |
+| `wave_separation.py` | **The library — use this one.** `separate`, `separate_field`, `backpropagate`, `bar_interface`, `specimen_response`, `conditioning`, `single_wave_window`. Takes `dispersion` (real `c_p(f)`) and `attenuation` (`α(f)`, for a lossy bar). numpy only. |
+| `config.toml` | **All parameters, every case** — materials, geometry, gauge locations, numerics, `eta`, the calibration's `L_free_ref`, and the measured-shot cases. |
+| `config.py` | Reads and validates `config.toml`. A measured shot goes through `_validate_experiment`, which drops the simulator-only checks. stdlib `tomllib`, no dependency. |
 | `recording.py` | Records only the gauge / interface / specimen rows. Resolves gauge distance → element, once, for both simulators. |
 | `dump.py` | Writes and reads `dump.npz`. Its docstring lists every field. |
 | `simulate_compression.py` | 1D direct-impact COMPRESSION bar. Parameters from `[compression]`. A module — **never run directly**, use `drive_compression.py`. |
@@ -1324,7 +1669,10 @@ specimen reduction, which is what the floor is actually made of.
 | `drive_tension.py` | Same for `simulate_tension.py`. Writes the same filename — the dumps overwrite each other. |
 | `drive_calibration_tension.py` | Runs the connected-bar calibration shot (`[calibration_tension]`, no specimen) through `simulate_tension.py`. |
 | `drive_calibration_compression.py` | Runs the direct-impact calibration shot (`[calibration_compression]`, the two bars struck face to face with **no specimen**) through `simulate_compression.py`. |
-| `identify_bar_compression.py` | Recovers each bar's gauge positions, spacing `D` and `c0` from that shot. Two bars, two wave speeds, two identifications. Needs one measured length **per bar** — each bar's own length, `L_free_in_ref` / `L_free_out_ref` in `config.toml`, or `--l-in-ref` / `--l-out-ref`. |
+| `identify_bar_compression.py` | Recovers each bar's gauge positions, spacing `D` and `c0` from that shot. Two bars, two wave speeds, two identifications. Needs one measured length **per bar** — each bar's own length, `L_free_in_ref` / `L_free_out_ref` in `config.toml`, or `--l-in-ref` / `--l-out-ref`. `--experiment CASE` runs it on a **measured** shot instead, where there is no ground truth and only the bars that carry two gauges are identified. Writes `bar_identified.npz`. |
+| `experiment.py` | Loads a MEASURED shot into the same dict shape `dump.npz` produces — column map, baseline removal, trim to the first arrival. No ground-truth keys: it has none and must not invent any. |
+| `identify_attenuation.py` | `α(f)` and `c_p(f)` from two gauges on the same bar, by the transfer function between them. Magnitudes only — no boundary condition — so the free-end null stays an independent check of it. A module; `identify_bar_compression.py` and `reconstruct_interface.py` both use it. |
+| `reconstruct_interface.py` | **The deliverable for a real shot:** force at the impact interface, `F = P + M`, plus the four checks — free-end null, causality, unilateral contact, separation. Runs the identified and tape positions side by side. `--no-attenuation` for the lossless comparison. |
 | `identify_bar_tension.py` | Recovers gauge positions, spacing `D` and `c0` from that shot's echo train. Never reads the configured gauge list. Needs one measured length: `L_free_ref` in `config.toml`, or `--l-free-ref`. |
 | `reduce_specimen.py` | Full chain: gauges → specimen stress/strain, validated against the simulator's own measurement. `--headless` to skip the window. |
 | `lagrange_diagram.py` | The separated waves as x-t FIELDS across the whole assembly, from the ordinary dump. Prints the gauge round trip, the free-surface null and the interface force as numbers. |
@@ -1335,9 +1683,11 @@ specimen reduction, which is what the floor is actually made of.
 | `clean.sh` | Removes generated output and `__pycache__`. `-n` for a dry run. |
 
 Generated at run time and safe to delete (`./clean.sh`): `dump.npz`,
-`specimen.dat`, `specimen_reconstructed.dat`, `gauge_forces.png`,
-`specimen_reconstruction.png`, `bar_identification_tension.png`,
-`bar_identification_compression.png`, `lagrange_diagram.png`. `clean.sh` also removes the superseded
+`bar_identified.npz`, `specimen.dat`, `specimen_reconstructed.dat`,
+`interface_force.dat`, `gauge_forces.png`, `specimen_reconstruction.png`,
+`bar_identification_tension.png`, `bar_identification_compression.png`,
+`bar_identification_experiment_pc_bar.png`, `interface_force.png`,
+`lagrange_diagram.png`. `clean.sh` also removes the superseded
 `eps.npy` / `force.npy` / `meta.npz` / `meta.npy` if an older run left them.
 
 ## Dependencies

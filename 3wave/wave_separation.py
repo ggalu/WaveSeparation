@@ -76,20 +76,55 @@ __all__ = ['separate', 'separate_field', 'backpropagate', 'bar_interface',
            'specimen_response', 'conditioning', 'single_wave_window']
 
 
-def _wavenumber(f, c0, eta, dispersion):
-    """Complex wavenumber xi = (w - i eta) / c_p(f) on a one-sided axis."""
+def _curve(spec, f, scale=1.0):
+    """
+    Evaluate a None | callable | (x, y) table specification on the axis `f`.
+
+    np.interp HOLDS THE ENDPOINT VALUES outside the table, and that is relied
+    on: an attenuation identified over 2-50 kHz is then automatically flat above
+    50 kHz rather than extrapolating, which is what band-limits the de-
+    attenuation. See `attenuation` in `separate`.
+    """
+    if spec is None:
+        return None
+    if callable(spec):
+        return np.asarray(spec(f), float) * scale
+    xp, yp = np.asarray(spec[0], float), np.asarray(spec[1], float)
+    return np.interp(f, xp, yp) * scale
+
+
+def _wavenumber(f, c0, eta, dispersion, attenuation=None):
+    """
+    Complex wavenumber on a one-sided axis:
+
+        xi = (w - i eta) / c_p(f)  -  i alpha(f)
+
+    The first term is the elastic propagator plus the Laplace window; the second
+    is material ATTENUATION, in 1/length. The plus wave carries
+
+        exp(-i xi x) = exp(-i w x / c_p) exp(-eta x / c_p) exp(-alpha x)
+
+    so it decays going away from the interface, and the minus wave carries
+    exp(+i xi x), i.e. exp(+alpha x) -- correct, because a wave heading TOWARD
+    the interface was larger further out. That growing branch is the ill-posed
+    one; see the band-limit note under `attenuation` in `separate`.
+    """
     w = 2.0 * np.pi * f
-    if dispersion is None:
+    cp = _curve(dispersion, f, c0)
+    if cp is None:
         cp = np.full(f.shape, float(c0))
-    elif callable(dispersion):
-        cp = np.asarray(dispersion(f), float) * c0
-    else:                                   # (freq, cp/c0) lookup table
-        fp, rp = np.asarray(dispersion[0], float), np.asarray(dispersion[1], float)
-        cp = np.interp(f, fp, rp) * c0
-    return (w - 1j * eta) / cp
+    xi = (w - 1j * eta) / cp
+    a = _curve(attenuation, f)
+    if a is not None:
+        if np.any(a < 0):
+            raise ValueError('attenuation must be >= 0; a negative alpha '
+                             'amplifies the plus wave as it propagates')
+        xi = xi - 1j * a
+    return xi
 
 
-def _pm_spectra(t, signals, positions, c0, eta, n_fft, dispersion):
+def _pm_spectra(t, signals, positions, c0, eta, n_fft, dispersion,
+                attenuation=None):
     """
     Validate the inputs and solve the normal equations, in the frequency domain.
 
@@ -146,8 +181,22 @@ def _pm_spectra(t, signals, positions, c0, eta, n_fft, dispersion):
     win = np.exp(-eta * tau)
     E = [np.fft.rfft(s * win, n_fft) for s in sig]
     f = np.fft.rfftfreq(n_fft, dt)
-    xi = _wavenumber(f, c0, eta, dispersion)
+    xi = _wavenumber(f, c0, eta, dispersion, attenuation)
     xc = np.conj(xi)
+
+    # exp(+alpha x) on the minus branch is the de-attenuation, and it is the
+    # ill-posed half of the model: it grows without bound with frequency. The
+    # same ceiling that bounds eta bounds it. A table-form `attenuation` is its
+    # own band limit (np.interp holds the endpoints); a callable is not, and
+    # this is what catches one that was never rolled off.
+    # -xi.imag IS the exponent's coefficient: eta/c_p plus alpha, together.
+    a_max = float(np.max(np.maximum(-xi.imag, 0.0))) * float(np.max(x))
+    if a_max > 700:
+        raise ValueError(
+            f'max(alpha) * max(position) = {a_max:.1f}; '
+            'exp(+alpha x) will overflow. Band-limit the attenuation -- an '
+            '(freq, alpha) table holds its endpoint value beyond the table and '
+            'is the easy way to do that.')
 
     # least-squares normal equations, summed over gauges
     #   [h1  g ] [P]   [E1]
@@ -168,7 +217,8 @@ def _pm_spectra(t, signals, positions, c0, eta, n_fft, dispersion):
     return P, M, xi, n_fft, tau
 
 
-def separate(t, signals, positions, c0, eta, n_fft=None, dispersion=None):
+def separate(t, signals, positions, c0, eta, n_fft=None, dispersion=None,
+             attenuation=None):
     """
     Separate measured strain histories into the two travelling waves at x = 0.
 
@@ -195,6 +245,24 @@ def separate(t, signals, positions, c0, eta, n_fft=None, dispersion=None):
         is the right choice for 1D simulated data. A callable or a lookup table
         returns c_p / c0 as a function of frequency -- e.g. the Pochhammer-Chree
         curve in Results_Raw/pochhammer.mat.
+    attenuation : None | callable | (freq, alpha)
+        Material attenuation alpha(f), in 1/length -- the same units as
+        1/positions. None means a lossless bar, which is right for metal and for
+        simulated data. A real POLYMER bar is not lossless: polycarbonate
+        measures alpha ~ 5.7e-5 * f [1/mm, f in kHz], a linear law, i.e. a
+        constant loss angle. Without it the two gauges cannot be fitted at once
+        and the residual shows up as a free-surface null that will not go below
+        ~9e-2 and an interface force that goes tensile where a contact cannot
+        pull.
+
+        PREFER THE TABLE FORM. `np.interp` holds the endpoint values outside the
+        table, so a table identified over 2-50 kHz is flat above 50 kHz instead
+        of extrapolating -- and that flat top is the BAND LIMIT, which is not
+        optional. The minus branch carries exp(+alpha x), so an unbounded
+        alpha(f) amplifies high-frequency noise without limit; taken to Nyquist
+        it overflows outright, and just short of that it produces a null
+        residual that looks 15x better than the truth. `_pm_spectra` raises
+        rather than overflow, but the quiet case is the dangerous one.
 
     Returns
     -------
@@ -209,7 +277,7 @@ def separate(t, signals, positions, c0, eta, n_fft=None, dispersion=None):
     `positions` together cannot change the result.
     """
     P, M, xi, n_fft, tau = _pm_spectra(t, signals, positions, c0, eta,
-                                       n_fft, dispersion)
+                                       n_fft, dispersion, attenuation)
     # inverse: back to time, then undo the window
     n = len(tau)
     amp = np.exp(+eta * tau)
@@ -218,7 +286,7 @@ def separate(t, signals, positions, c0, eta, n_fft=None, dispersion=None):
 
 
 def separate_field(t, signals, positions, c0, eta, x, n_fft=None,
-                   dispersion=None, decimate=1, chunk=64):
+                   dispersion=None, decimate=1, chunk=64, attenuation=None):
     """
     The two separated waves as a FIELD: reconstructed at many x, not just x = 0.
 
@@ -240,8 +308,11 @@ def separate_field(t, signals, positions, c0, eta, x, n_fft=None,
 
     Parameters
     ----------
-    t, signals, positions, c0, eta, n_fft, dispersion
-        Exactly as for `separate`.
+    t, signals, positions, c0, eta, n_fft, dispersion, attenuation
+        Exactly as for `separate`. With `attenuation` the field is no longer a
+        pure shear: |eps_plus| decays as exp(-alpha x) along the bar instead of
+        being constant, which is the physically right picture for a polymer bar
+        and worth knowing before reading a Lagrange diagram of one.
     x : (n_x,) array
         Where to reconstruct, in this bar's LOCAL coordinate: 0 is the
         interface, positive goes INTO the bar, away from the specimen. Unlike
@@ -276,7 +347,7 @@ def separate_field(t, signals, positions, c0, eta, x, n_fft=None,
     surface the two must cancel, and they do.
     """
     P, M, xi, n_fft, tau = _pm_spectra(t, signals, positions, c0, eta,
-                                       n_fft, dispersion)
+                                       n_fft, dispersion, attenuation)
     x = np.atleast_1d(np.asarray(x, float))
     n = len(tau)
     c0 = float(c0)
@@ -309,7 +380,7 @@ def separate_field(t, signals, positions, c0, eta, x, n_fft=None,
 
 
 def backpropagate(t, signal, position, c0, eta=0.0, n_fft=None, dispersion=None,
-                  direction='plus'):
+                  direction='plus', attenuation=None):
     """
     Single-gauge reconstruction at x = 0, ASSUMING ONLY ONE WAVE IS PRESENT.
 
@@ -375,7 +446,7 @@ def backpropagate(t, signal, position, c0, eta=0.0, n_fft=None, dispersion=None,
     tau = t - t[0]
     E = np.fft.rfft(s * np.exp(-eta * tau), n_fft)
     f = np.fft.rfftfreq(n_fft, dt)
-    xi = _wavenumber(f, c0, eta, dispersion)
+    xi = _wavenumber(f, c0, eta, dispersion, attenuation)
 
     # E = W exp(-/+ i xi d)  ->  W = E exp(+/- i xi d)
     W = E * np.exp((1j if direction == 'plus' else -1j) * xi * d)
@@ -551,7 +622,7 @@ def _cumtrapz(y, t):
     return out
 
 
-def conditioning(f, positions, c0, eta, dispersion=None):
+def conditioning(f, positions, c0, eta, dispersion=None, attenuation=None):
     """
     Diagnostic: normalised system determinant, 1 = ideal, 0 = singular.
 
@@ -563,7 +634,7 @@ def conditioning(f, positions, c0, eta, dispersion=None):
     """
     f = np.asarray(f, float)
     x = np.asarray(positions, float)
-    xi = _wavenumber(f, c0, eta, dispersion)
+    xi = _wavenumber(f, c0, eta, dispersion, attenuation)
     xc = np.conj(xi)
     h1 = sum(np.exp(-1j * (xi - xc) * d) for d in x)
     h2 = sum(np.exp(+1j * (xi - xc) * d) for d in x)
