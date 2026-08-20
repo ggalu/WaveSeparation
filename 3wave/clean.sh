@@ -58,6 +58,9 @@ GENERATED=(
     "interface_force_experiment_pc_specimen.dat"
     "interface_force_experiment_pc_specimen_lossless.png"
     "interface_force_experiment_pc_specimen_lossless.dat"
+    # figures written by plot_gauges_at_interface.py, one per case
+    "gauges_at_interface.png"
+    "gauges_at_interface_experiment_pc_specimen.png"
     # figure written by lagrange_diagram.py
     "lagrange_diagram.png"
     # legacy outputs of the unmodified simulate_compression.py, in case an older copy is run

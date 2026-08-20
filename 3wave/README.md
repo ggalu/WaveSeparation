@@ -1396,23 +1396,37 @@ they live on the *other* boundary:
 | check | what it asserts | lossless | with α(f) |
 |---|---|---|---|
 | free-end null | `ε₊ + ε₋ = 0` at the far surface | 8.22e-02 | **3.53e-02** |
-| causality | `M ≈ 0` at the contact for `t < 2L/c` | 0.164 | **0.050** |
-| unilateral contact | `F ≥ 0` — a contact cannot pull | 0.124 | **0.038** |
-| separation | `F → 0` once the tensile echo arrives | 0.087 | **0.047** |
+| causality | `M ≈ 0` at the contact for `t < 2L/c` | 0.189 | **0.050** |
+| unilateral contact | `F ≥ 0` — a contact cannot pull | 0.139 | **0.042** |
+| separation | `F → 0` once the tensile echo arrives | *n/a* | **0.047** |
 
-All four improve by 2–3×, and **α was fitted to none of them** — it comes from
-gauge magnitudes alone. That is what makes this evidence rather than
+All of them improve by 2–3×, and **α was fitted to none of them** — it comes
+from gauge magnitudes alone. The lossless *separation* row reads *n/a* rather
+than a number, and that is itself a result: without the attenuation model the
+echo edge at `x = 0` is so smeared that `|M|` never returns to 10 % of its own
+peak, so the edge cannot be located and there is no "after separation" to score.
+The code reports that rather than clamping it into a plausible figure. That is what makes this evidence rather than
 curve-fitting, and it is why `identify_attenuation.py` deliberately does *not*
 tune α on the boundary conditions. Tried, and it does not work: raise α and all
 of them keep improving monotonically with no minimum, because more damping
 quietly suppresses everything. They establish that α > 0 is needed; they cannot
 pin its value.
 
-The causality window needs one measured quantity of its own. The echo has
-crossed `2L` = 2054 mm of lossy bar by the time it reaches the contact and its
-10–90 rise is **369 µs**, so a clearance shorter than that scores the check
-against the very edge it is waiting for — 0.198 instead of 0.050. The clearance
-is taken from `M` itself rather than picked.
+The causality window needs two measured quantities of its own, and both are
+easy to get wrong.
+
+The first is the echo's rise. It has crossed `2L` = 2054 mm of lossy bar by the
+time it reaches the contact, and its 10–90 rise there is **369 µs**, so a
+clearance shorter than that scores the check against the very edge it is waiting
+for — 0.198 instead of 0.050. The clearance is taken from `M` itself.
+
+The second is **when the wave left `x = 0`**, because `2L/c` is a *delay* and
+not an instant. The obvious rule — the first crossing of a few per cent of peak
+`P` — latches onto whatever happens first, which on a record with a low-level
+precursor is the precursor. `wavefront_time` anchors on the steepest rise
+*before the peak* instead: a precursor cannot win on slope, and confining the
+search to before the peak stops it finding the final unloading edge, which is
+often the steepest thing in the whole record.
 
 ### Two position sets, side by side
 
@@ -1562,15 +1576,20 @@ identification times are simply gone.
 | check | calibration shot | **specimen shot** |
 |---|---|---|
 | free-end null | 3.53e-02 | **3.11e-02** |
-| causality, `M ≈ 0` before the echo | 0.050 | **0.005** |
-| `F ≥ 0` | 0.038 | **0.000** |
+| `F ≥ 0` | 0.042 | **0.000** |
+| causality, `M ≈ 0` before the echo | 0.050 | *n/a* |
 | peak `F` | 1.382 kN | **1.135 kN** |
 
-**That middle column is the evidence the calibration is a bar property and not a
-per-record fit.** The free-end null on a *different shot*, with numbers it never
-saw, reads as well as it does on the shot they came from. The causality residual
-is 10× better, because this record has no sharp wavefront for the lossless-bar
-model error to bite on.
+**The free-end null is the evidence that the calibration is a bar property and
+not a per-record fit** — a boundary condition those numbers never saw, on a
+different shot, satisfied as well as on the shot they came from.
+
+The causality check does not apply here and is reported *n/a* rather than
+clamped: the echo edge at `x = 0` is broad enough on this record to reach back
+to the wavefront, so no interval is both after the loading and before the echo.
+An earlier version of this section quoted **0.005** for it. That came from a
+window anchored on the precursor instead of the wavefront — i.e. from 1.6 ms of
+nearly empty record — and it meant nothing.
 
 Two things this record needed that the calibration shot did not, both now
 config:
@@ -1598,6 +1617,65 @@ reaches `x = 0` one round trip after the wave **left** it, which on this record
 is 1928 µs into the analysis window, not 1460. The code takes it from `P`'s own
 onset for exactly this reason. All output times — figure and `.dat` alike —
 are referred back to the **source file's** time base via `t0_file`.
+
+### One gauge is enough, until it is not
+
+```bash
+python3 plot_gauges_at_interface.py                              # calibration shot
+python3 plot_gauges_at_interface.py --case experiment_pc_specimen
+```
+
+![Each gauge shifted to the interface on its own](gauges_at_interface_experiment_pc_specimen.png)
+
+A single gauge cannot separate anything — one equation, two unknowns — but it
+*can* be shifted to the interface on the assumption that only one wave is
+passing it, which is what a classical single-gauge reduction does. On a
+direct-impact bar that assumption is true for a while, because the loading wave
+is generated at the interface and nothing comes back until the far free end
+returns it.
+
+This plot is that assumption drawn: `backpropagate` shifts each gauge to `x = 0`
+by itself, against `separate` using both together. Where the curves lie on top
+of each other, one gauge would have done. Where they peel away, the single-gauge
+answer is wrong by the whole of the neglected wave — and it still looks entirely
+plausible, which is the failure mode multi-gauge separation exists for.
+
+**Which gauge expires first is the opposite of the intuition.** The window in
+the reconstruction ends at
+
+```math
+t \;=\; t_\text{left} + \frac{2\,(L - d)}{c_0}
+```
+
+so the gauge **further** from the interface has the **shorter** window — its
+echo has less bar to cross. Two gauges `D` apart expire `2D/c₀` apart, 529 µs
+here. On the specimen shot `out-1` (498 mm) is done at 1229 µs while `out-0`
+(127 mm) survives to 1758 µs, and past those the errors are 0.52 and 0.04 of the
+two-gauge answer respectively.
+
+Note the `2(L−d)/c₀`, which is not the same as the `(2L−d)/c₀` at which the echo
+reaches the **gauge**. The two differ by exactly `d/c₀`, because the
+reconstruction *is* the gauge record advanced by that much — everything in it
+happens `d/c₀` earlier than the gauge saw it. `backpropagate`'s docstring said
+`(2L−d)/c₀` without saying which time base it meant, and using it overstates the
+valid window by 354 µs on a gauge 498 mm out in polycarbonate. Both are now
+spelled out there.
+
+**The two gauges disagreeing *inside* the common window is a diagnostic in its
+own right.** A single wave shifted from two distances must give the same answer;
+content that is not propagating at `c₀` does not, and the error grows with the
+shift, so the far gauge shows it worst. That is exactly what the specimen shot's
+slow precursor does — `out-1` sits visibly low through it while `out-0` tracks
+the separation. Cross-correlating the two gauge records over such a stretch
+settles it: a travelling wave must show `D/c₀` = 264 µs of lag, and this one
+shows zero.
+
+No in-window error figure is quoted, deliberately. Both single-gauge curves ring
+at the *start* of the record — shifting a gauge to `x = 0` moves its wavefront
+toward the record boundary, 354 µs for the far one — and the echo edge leaks
+ahead of its arrival at the *end*. Any single number over the window is one of
+those two artefacts rather than the physics. The lower panel is flat in between,
+and that is the whole claim.
 
 ### What this record cannot settle
 
@@ -1722,7 +1800,7 @@ specimen reduction, which is what the floor is actually made of.
 
 | File | Purpose |
 |---|---|
-| `wave_separation.py` | **The library — use this one.** `separate`, `separate_field`, `backpropagate`, `bar_interface`, `specimen_response`, `conditioning`, `single_wave_window`. Takes `dispersion` (real `c_p(f)`) and `attenuation` (`α(f)`, for a lossy bar). numpy only. |
+| `wave_separation.py` | **The library — use this one.** `separate`, `separate_field`, `backpropagate`, `bar_interface`, `specimen_response`, `conditioning`, `single_wave_window`, `wavefront_time`. Takes `dispersion` (real `c_p(f)`) and `attenuation` (`α(f)`, for a lossy bar). numpy only. |
 | `config.toml` | **All parameters, every case** — materials, geometry, gauge locations, numerics, `eta`, the calibration's `L_free_ref`, and the measured-shot cases. |
 | `config.py` | Reads and validates `config.toml`. A measured shot goes through `_validate_experiment`, which drops the simulator-only checks. stdlib `tomllib`, no dependency. |
 | `recording.py` | Records only the gauge / interface / specimen rows. Resolves gauge distance → element, once, for both simulators. |
@@ -1736,6 +1814,7 @@ specimen reduction, which is what the floor is actually made of.
 | `identify_bar_compression.py` | Recovers each bar's gauge positions, spacing `D` and `c0` from that shot. Two bars, two wave speeds, two identifications. Needs one measured length **per bar** — each bar's own length, `L_free_in_ref` / `L_free_out_ref` in `config.toml`, or `--l-in-ref` / `--l-out-ref`. `--experiment CASE` runs it on a **measured** shot instead, where there is no ground truth and only the bars that carry two gauges are identified. Writes `bar_identified.npz`. |
 | `experiment.py` | Loads a MEASURED shot into the same dict shape `dump.npz` produces — column map, baseline removal, trim to the first arrival. No ground-truth keys: it has none and must not invent any. |
 | `identify_attenuation.py` | `α(f)` and `c_p(f)` from two gauges on the same bar, by the transfer function between them. Magnitudes only — no boundary condition — so the free-end null stays an independent check of it. A module; `identify_bar_compression.py` and `reconstruct_interface.py` both use it. |
+| `plot_gauges_at_interface.py` | Each gauge shifted to `x = 0` alone (`backpropagate`) against the two-gauge separation, with each gauge's single-wave window `2(L-d)/c0`. Shows how much of a record needed two gauges, and what one gauge would have claimed past that. |
 | `reconstruct_interface.py` | **The deliverable for a real shot:** force at the impact interface, `F = P + M`, plus the four checks — free-end null, causality, unilateral contact, separation. Runs the identified and tape positions side by side. `--no-attenuation` for the lossless comparison. |
 | `identify_bar_tension.py` | Recovers gauge positions, spacing `D` and `c0` from that shot's echo train. Never reads the configured gauge list. Needs one measured length: `L_free_ref` in `config.toml`, or `--l-free-ref`. |
 | `reduce_specimen.py` | Full chain: gauges → specimen stress/strain, validated against the simulator's own measurement. `--headless` to skip the window. |

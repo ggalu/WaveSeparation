@@ -73,7 +73,8 @@ exp(+eta*t) is applied on the way out, so eta * t_max much above ~30 overflows.
 import numpy as np
 
 __all__ = ['separate', 'separate_field', 'backpropagate', 'bar_interface',
-           'specimen_response', 'conditioning', 'single_wave_window']
+           'specimen_response', 'conditioning', 'single_wave_window',
+           'wavefront_time']
 
 
 def _curve(spec, f, scale=1.0):
@@ -398,8 +399,26 @@ def backpropagate(t, signal, position, c0, eta=0.0, n_fft=None, dispersion=None,
       * a direct-impact bar, before the reflection off its far free end gets
         back. The loading wave is generated AT the interface and travels away
         from it, and in a uniform bar nothing travels back until the free end
-        returns it. For a bar of length L and a gauge at distance d, that
-        leaves a single-wave window lasting until t = (2L - d) / c0.
+        returns it.
+
+        Where that window ENDS needs care, because there are two answers and
+        only one of them is the one you want. For a bar of length L and a gauge
+        at distance d, measuring from the moment the wave left x = 0:
+
+            in the GAUGE RECORD          the echo reaches the gauge at
+                                         (2L - d) / c0
+            in THIS FUNCTION'S OUTPUT    2 (L - d) / c0
+
+        They differ by exactly d / c0, because the output IS the gauge record
+        advanced by that much -- reconstructing at x = 0 means undoing the
+        travel time, so everything in it happens d / c0 earlier than the gauge
+        saw it. The second number is the one to check a reconstruction against,
+        and it is the SHORTER of the two. Using the first overstates the valid
+        window by 354 us on a gauge 498 mm out in polycarbonate.
+
+        Note also which gauge expires first: the window is 2 (L - d) / c0, so a
+        gauge FURTHER from the interface has a SHORTER window, not a longer one.
+        Its echo has less bar to cross. Two gauges D apart expire 2D / c0 apart.
 
     Check the window before trusting the result. `direction` says which wave is
     the surviving one, in the local convention of this module: 'plus' travels
@@ -453,6 +472,57 @@ def backpropagate(t, signal, position, c0, eta=0.0, n_fft=None, dispersion=None,
     w = np.fft.irfft(W, n=n_fft)[:n] * np.exp(+eta * tau)
     zero = np.zeros_like(w)
     return (w, zero) if direction == 'plus' else (zero, w)
+
+
+def wavefront_time(t, w, frac=0.1):
+    """
+    When the loading wavefront left x = 0, robustly against a slow precursor.
+
+    Every window that has to be placed relative to "the wave left the interface"
+    -- the free-end echo at 2L/c, the single-wave window (2L-d)/c0 -- needs this
+    instant, and the obvious rule, the first crossing of a few per cent of peak,
+    is not safe on a real record. It latches onto whatever happens FIRST, and on
+    a record with a low-level precursor that is the precursor. Measured on
+    data/2026-08-20_PC_AFC.txt, whose trigger fires during a slow rise 1.6 ms
+    ahead of the shot, a 2 % rule put the departure 1638 us early and moved
+    every window with it -- silently, because every printed number stayed
+    plausible.
+
+    So anchor on the STEEPEST part of the rise, which a slow precursor cannot
+    win, and walk back to where the slope falls below `frac` of its peak. That
+    is the foot of the wavefront. On a record with no precursor it agrees with
+    the naive rule to a few samples.
+
+    The search is confined to BEFORE the peak of |w|, which matters as much as
+    the rest: the steepest slope in a whole record is often the final unloading,
+    and on the record above that put the "departure" 1.6 ms LATE instead of
+    1.6 ms early. Loading precedes the peak by definition; unloading follows it.
+
+    Parameters
+    ----------
+    t : (N,) array
+        Uniform time base.
+    w : (N,) array
+        The wave reconstructed AT x = 0 -- `separate`'s P for a bar loaded at
+        its interface. Its own onset IS the departure, which is why this takes
+        the reconstruction and not a gauge record.
+    frac : float
+        Fraction of peak slope that counts as the foot of the rise.
+
+    Returns
+    -------
+    float
+        The departure time, in the units of `t`.
+    """
+    t = np.asarray(t, float)
+    w = np.asarray(w, float)
+    g = np.abs(np.gradient(w, float(np.mean(np.diff(t)))))
+    i_pk = max(int(np.argmax(np.abs(w))), 1)
+    i = int(np.argmax(g[:i_pk]))
+    thr = frac * g[i]
+    while i > 0 and g[i] > thr:
+        i -= 1
+    return float(t[i])
 
 
 def single_wave_window(length, position, c0):

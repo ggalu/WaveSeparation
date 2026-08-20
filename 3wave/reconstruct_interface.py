@@ -76,7 +76,7 @@ _ap.add_argument('--no-attenuation', action='store_true',
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
 import config
-from wave_separation import separate
+from wave_separation import separate, wavefront_time
 
 IDENT_FILE = 'bar_identified.npz'
 
@@ -173,10 +173,13 @@ def _echo_time(p):
     from -1638 us and the wave does not leave x = 0 until ~2150 us into it, so
     measuring R from t[0] would look for the echo 1.5 round trips early.
 
-    P is reconstructed AT x = 0, so P's own onset is the moment the wave left.
+    P is reconstructed AT x = 0, so P's own onset is the moment the wave left --
+    taken with `wavefront_time`, which anchors on the steepest rise before the
+    peak rather than on a first-crossing rule. On a record with a low-level
+    precursor a first-crossing rule finds the precursor, and every window keyed
+    to this instant moves with it. See that function.
     """
-    amp = float(np.abs(p).max())
-    return float(t[int(np.argmax(np.abs(p) > 0.02 * amp))]) + R
+    return wavefront_time(t, p) + R
 
 
 def _echo_rise(m, t_echo):
@@ -201,10 +204,17 @@ def _echo_rise(m, t_echo):
         return 3.0 * float(np.mean(np.diff(t)))
     top = float(np.max(a[lo:hi]))
     j90 = lo + int(np.argmax(a[lo:hi] > 0.9 * top))
+    # Do not walk back past the moment the wave LEFT x = 0. Nothing before that
+    # can be part of this echo's edge, and on a record whose M never returns to
+    # a clean zero -- 2026-08-20_PC_AFC.txt, where a precursor contaminates the
+    # low-frequency split -- an unbounded walk-back runs to the start of the
+    # record and swallows the whole window it was supposed to clear.
+    floor = int(np.searchsorted(t, t_echo - R))
     j10 = j90
-    while j10 > 0 and a[j10] > 0.1 * top:
+    while j10 > floor and a[j10] > 0.1 * top:
         j10 -= 1
-    return max(float(t[j90] - t[j10]), 3.0 * float(np.mean(np.diff(t))))
+    return (max(float(t[j90] - t[j10]), 3.0 * float(np.mean(np.diff(t)))),
+            j10 > floor)
 
 
 def checks(p, m, F):
@@ -224,8 +234,9 @@ def checks(p, m, F):
                truncation, the same trap the free-end null has.
     """
     amp = float(np.abs(p).max())
-    i_on = int(np.argmax(np.abs(p) > 0.02 * amp))
     t_echo = _echo_time(p)
+    # windows start at the wavefront, not at the record's first stirring
+    i_on = int(np.searchsorted(t, t_echo - R))
     # How long the LOADING takes at x = 0, 10-90, measured over the loading
     # phase only -- i.e. before the echo returns and P stops being the whole
     # story. A different quantity from the echo's rise above: this one is what
@@ -236,7 +247,7 @@ def checks(p, m, F):
     _j90 = int(np.argmax(_a > 0.9 * _pk))
     _j10 = int(np.argmax(_a > 0.1 * _pk))
     rise_p = float(t[_j90] - t[_j10])
-    rise = _echo_rise(m, t_echo)
+    rise, rise_ok = _echo_rise(m, t_echo)
     i_pre = int(np.searchsorted(t, t_echo - rise))    # M must be quiet before
     i_sep = int(np.searchsorted(t, t_echo + rise))    # contact open after
     i_end = int(0.95 * N)
@@ -244,10 +255,17 @@ def checks(p, m, F):
     # separation" to score -- but F >= 0 still holds, for the WHOLE record,
     # since a dry compression interface cannot pull either way.
     i_ten = i_sep if IMPACT else i_end
+    # A causality window can come out empty when the echo edge is so broad that
+    # it reaches back to the wavefront -- there is then no interval in which M
+    # is BOTH after the loading and before the echo, and the check simply does
+    # not apply to this record. Say so rather than clamp it into a number.
+    causality = (float(np.abs(m[i_on:i_pre]).max() / amp)
+                 if i_pre > i_on + 2 else float('nan'))
     return dict(
         amp=amp, i_on=i_on, i_pre=i_pre, i_sep=i_sep, i_end=i_end, rise=rise,
+        causality_ok=(i_pre > i_on + 2), rise_ok=rise_ok,
         rise_p=rise_p,
-        causality=float(np.abs(m[i_on:i_pre]).max() / amp),
+        causality=causality,
         tensile=float(max(0.0, -F[i_on:i_ten].min()) / amp),
         after=(float(np.sqrt(np.mean(F[i_sep:i_end] ** 2)) / amp)
                if IMPACT and i_end > i_sep else float('nan')),
@@ -287,18 +305,27 @@ print(f'{"":>11} {"":>8} {"["+UNITS+"]":>9} {"null rms":>10} '
 for name, x in SETS:
     r = RES[name]
     Dg = abs(x[1] - x[0]) if len(x) > 1 else float('nan')
+    _cau = f'{r["causality"]:11.3f}' if r['causality_ok'] else f'{"n/a":>11}'
     print(f'{name:>11} {Dg:8.2f} {r["peak"]:9.3f} {r["null"]:10.2e} '
-          f'{r["causality"]:11.3f} {r["tensile"]:9.3f}'
+          + _cau + f' {r["tensile"]:9.3f}'
           + (f'{r["after"]:11.3f}' if IMPACT else ''))
 print('the right-hand columns are fractions of peak |P|. Zero is the '
       'ideal;\nwhat is left is model error, and its SIGN is known -- a contact '
       'that pulls or a\nwave that arrives early is not a measurement, it is the '
       'residual.')
 _r0 = RES[SETS[0][0]]
-print(f'the echo reaches x = 0 at {_r0["t_echo"]:.0f} us -- one round trip after '
-      f'the wave LEFT it,\nnot after the record started. Its own 10-90 rise '
-      f'there measures {_r0["rise"]*1e3:.0f} us after\ncrossing 2L = {2*L:.0f} mm '
-      'of lossy bar, and that is the clearance held either side.')
+_T0 = float(d.get('t0_file', 0.0))
+print(f'the echo reaches x = 0 at {_r0["t_echo"] + _T0:.0f} us (source-file base) '
+      '-- one round trip\nafter the wave LEFT it, not after the record started.')
+if _r0['rise_ok']:
+    print(f'its own 10-90 rise there measures {_r0["rise"]*1e3:.0f} us after '
+          f'crossing 2L = {2*L:.0f} mm of\nlossy bar, and that is the clearance '
+          'held either side.')
+else:
+    print(f'its edge could NOT be measured: |M| never falls back to 10 % of the '
+          'echo peak\nbetween the wavefront and the echo, so the walk-back hit '
+          'its bound. The\nclearance is that bound and the causality check is '
+          'reported n/a above.')
 
 if len(SETS) > 1:
     a, b = RES[SETS[0][0]], RES[SETS[1][0]]
@@ -333,9 +360,15 @@ else:
           '~20 us step this same rig delivers with no\n    specimen in the way. '
           'That is the specimen, not the bar -- and it is why\n    this record '
           'cannot be used to IDENTIFY anything: the edges are gone.')
-    print(f'  nothing returns to x = 0 until the free-end echo at '
-          f'{r["t_echo"]:.0f} us, and M holds\n    to {r["causality"]:.3f} of '
-          'peak before it -- the record is clean over the whole loading')
+    if r['causality_ok']:
+        print(f'  nothing returns to x = 0 until the free-end echo at '
+              f'{r["t_echo"]:.0f} us, and M holds\n    to {r["causality"]:.3f} '
+              'of peak before it')
+    else:
+        print(f'  the causality check DOES NOT APPLY to this record: the echo '
+              f'edge at x = 0 is\n    so broad that it reaches back to the '
+              'wavefront, leaving no interval that is\n    both after the '
+              'loading and before the echo. Reported n/a, not clamped.')
     print('  the bars never part here, so there is no "after separation" to '
           'score; F >= 0\n    is checked over the WHOLE record instead')
 
