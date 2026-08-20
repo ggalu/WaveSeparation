@@ -449,3 +449,67 @@ snr = 0.01                        # keep bins whose |F1| is above this fraction
 #   alpha = 5.65e-5 f, capped    4.83e-2
 window = 0.75
 tol = 6.0e-2
+
+# --------------------------------------------------------------------------
+# The SAME rig, with a specimen between the input bar and the output bar.
+#
+#   python3 identify_bar_compression.py --experiment experiment_pc_bar  # once
+#   python3 reconstruct_interface.py --case experiment_pc_specimen
+#
+# NOTHING IS IDENTIFIED FROM THIS SHOT. The bar's c0, gauge positions and
+# alpha(f) are properties of the BAR, measured once on the no-specimen
+# calibration and reused here -- which is the entire point of calibrating. The
+# specimen shot has no clean echo train to identify from anyway: the specimen
+# filters the wavefront to a ~450 us rise, and the edges the identification
+# needs are gone.
+#
+# x = 0 is therefore now the OUTPUT-BAR / SPECIMEN interface. The gauge
+# distances are unchanged because the output bar did not move relative to its
+# own gauges -- only what its front face touches changed.
+#
+# The check that transfers is the free-end null: 3.1e-02 here against 3.5e-02
+# on the calibration, on a different shot with the same numbers. That is
+# evidence the calibration is a bar property and not a per-record fit.
+# --------------------------------------------------------------------------
+[experiment_pc_specimen]
+loading = "compression"
+file = "data/2026-08-20_PC_AFC.txt"
+gauges = [118.0, 489.0]           # tape, from the output bar's front face
+L_free_out_ref = 1027.0
+L_free_in_ref = 2415.0
+L_free_ref_tol = 2.0
+
+# What sits at x = 0. "impact" means the two bars touch directly and the
+# reconstruction can expect them to PART when the tensile echo arrives;
+# "specimen" means something is in between and they do not. Only the reporting
+# depends on it -- the solve does not.
+interface = "specimen"
+
+[experiment_pc_specimen.columns]
+time = 0
+"out-0" = 1
+"out-1" = 2
+
+[experiment_pc_specimen.bar]
+length = 1027.0
+diameter = 16.7
+rho = 1.2e-6
+
+[experiment_pc_specimen.trim]
+# This record's trigger fires LATE: a slow rise starts at -1138 us, well before
+# t = 0, so the usual t < 0 baseline would subtract real signal. Take the
+# baseline before the rise instead, and keep the WHOLE record -- it is genuinely
+# quiescent at its start, which is what `separate` needs. Cutting it at 500 us
+# to "start at the interesting part" leaves a standing 0.13 kN preload and takes
+# the free-end null from 3.1e-02 to 1.9e-01.
+baseline_before = -1200.0         # us; before the slow rise
+start = -1638.0                   # us; i.e. keep everything
+
+[experiment_pc_specimen.attenuation]
+f_lo = 2.0
+f_hi = 50.0
+snr = 0.01
+
+[experiment_pc_specimen.null]
+window = 0.75
+tol = 6.0e-2

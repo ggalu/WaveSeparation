@@ -18,6 +18,11 @@ specimen_reconstructed.dat
 interface_force.dat
 interface_force_lossless.dat
 interface_force_lossless.png
+interface_force_experiment_pc_specimen.dat
+interface_force_experiment_pc_specimen_lossless.dat
+interface_force_experiment_pc_specimen_lossless.png
+interface_force_experiment_pc_specimen.png
+bar_identification_experiment_pc_bar.png
 
 # superseded output formats, in case an older revision is ever run here
 eps.npy

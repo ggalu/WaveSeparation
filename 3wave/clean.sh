@@ -53,6 +53,11 @@ GENERATED=(
     "interface_force.dat"
     "interface_force_lossless.png"
     "interface_force_lossless.dat"
+    # same script with --case <another shot>, e.g. the specimen record
+    "interface_force_experiment_pc_specimen.png"
+    "interface_force_experiment_pc_specimen.dat"
+    "interface_force_experiment_pc_specimen_lossless.png"
+    "interface_force_experiment_pc_specimen_lossless.dat"
     # figure written by lagrange_diagram.py
     "lagrange_diagram.png"
     # legacy outputs of the unmodified simulate_compression.py, in case an older copy is run

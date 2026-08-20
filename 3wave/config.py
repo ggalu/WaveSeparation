@@ -35,7 +35,7 @@ __all__ = ['load', 'bar_lengths', 'CASES', 'EXPERIMENT_CASES', 'BAR_TABLES',
 # simulator's tables -- no mesh, no striker, no material to integrate, because
 # the bar already did the integrating. _validate skips those checks for them
 # and keeps the ones that still mean something.
-EXPERIMENT_CASES = ('experiment_pc_bar',)
+EXPERIMENT_CASES = ('experiment_pc_bar', 'experiment_pc_specimen')
 
 CASES = ('compression', 'calibration_compression',
          'tension', 'calibration_tension') + EXPERIMENT_CASES

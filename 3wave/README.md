@@ -1517,23 +1517,87 @@ two waves settles it:
 
 | t [µs] | `P` | `M` | `F = P + M` |
 |---|---|---|---|
-| 1150 | 1.059 | −0.073 | 0.987 |
-| 1250 | 0.967 | −0.089 | 0.877 |
-| 1350 | 0.939 | −0.202 | 0.738 |
-| 1400 | 0.799 | −0.527 | 0.271 |
-| 1450 | 1.006 | −0.958 | 0.048 |
+| 1100 | 1.070 | −0.073 | 0.997 |
+| 1200 | 0.963 | −0.092 | 0.870 |
+| 1300 | 0.910 | −0.223 | 0.687 |
+| 1350 | 0.823 | −0.604 | 0.218 |
+| 1400 | 1.028 | −0.985 | 0.043 |
 
-`P` is flat across it. The whole decline is `M` going negative — the free-end
+(Times here are the **source file's** own base, which is what
+`interface_force.dat` carries; the echo lands at 1403 µs in it, 1460 µs after
+the wave left `x = 0`.) `P` is flat across it. The whole decline is `M` going negative — the free-end
 echo, already arriving. Its 10–90 rise at the contact measures **369 µs** after
 crossing `2L` = 2054 mm of lossy polycarbonate, so its foot starts around
 1150 µs even though the nominal arrival is 1460. **The drop is not a step at
 1460, it is a ramp centred on it.** That same 369 µs is what the causality check
 has to hold clear of, per [Four checks](#four-checks-and-three-of-them-consume-no-ground-truth).
 
-After separation the two waves mirror each other: averaged over 1600–2000 µs,
-`P` = +1.35 and `M` = −1.33, for `F` = 0.016 kN. The contact face is now a free
+After separation the two waves mirror each other: averaged over 1550–1950 µs,
+`P` = +1.35 and `M` = −1.34, for `F` = 0.014 kN. The contact face is now a free
 surface and satisfies the same null condition the far end does — which nothing
 imposed, since `separate` is never told about boundaries at all.
+
+### Reusing the calibration on a shot with a specimen
+
+`data/2026-08-20_PC_AFC.txt` is the same rig with a specimen between the
+aluminium bar and the PC bar. **Nothing is identified from it** — the bar's
+`c0`, gauge positions and `α(f)` were measured once on the no-specimen shot and
+are properties of the bar, which is the entire point of calibrating:
+
+```bash
+python3 identify_bar_compression.py --experiment experiment_pc_bar   # once
+python3 reconstruct_interface.py --case experiment_pc_specimen
+```
+
+`--case` reconstructs a different record with the identified numbers already in
+`bar_identified.npz`. `x = 0` is now the **output-bar / specimen interface**;
+the gauge distances are unchanged, because the output bar did not move relative
+to its own gauges — only what its front face touches did.
+
+It could not be identified from anyway. The specimen filters the wavefront: the
+force at `x = 0` takes **1016 µs** to go from 10 % to 90 %, against the ~20 µs
+step the same rig delivers with nothing in the way. The sharp edges the
+identification times are simply gone.
+
+| check | calibration shot | **specimen shot** |
+|---|---|---|
+| free-end null | 3.53e-02 | **3.11e-02** |
+| causality, `M ≈ 0` before the echo | 0.050 | **0.005** |
+| `F ≥ 0` | 0.038 | **0.000** |
+| peak `F` | 1.382 kN | **1.135 kN** |
+
+**That middle column is the evidence the calibration is a bar property and not a
+per-record fit.** The free-end null on a *different shot*, with numbers it never
+saw, reads as well as it does on the shot they came from. The causality residual
+is 10× better, because this record has no sharp wavefront for the lossless-bar
+model error to bite on.
+
+Two things this record needed that the calibration shot did not, both now
+config:
+
+- **its trigger fires late.** A slow rise starts at −1138 µs, well before
+  `t = 0`, so the default "baseline is `t < 0`" would have subtracted a fifth of
+  a kN of real signal as an offset. `baseline_before = -1200` recovers the true
+  noise floor, 5.9e-04 kN — the same as every other channel on this rig.
+- **`start = -1638`, i.e. keep the whole record.** `separate` needs the signals
+  quiescent at `t[0]`, and this one genuinely is at its start. Cutting it at
+  500 µs to "begin at the interesting part" looks tidier and is wrong: it leaves
+  the bar carrying a standing 0.13 kN and its own history, and the free-end null
+  goes from **3.1e-02 to 1.9e-01**. Start where the record is quiet, not where
+  the interesting part begins.
+
+That slow rise is worth a glance before trusting it: cross-correlating the two
+gauges over it gives a lag of **0 µs** against the 264 µs a travelling wave must
+show, so it is a quasi-static squeeze or common-mode pickup, not a wave. It is
+carried through the solve either way — `separate` damps what it cannot resolve
+below `eta / 2π` ≈ 0.16 kHz rather than inventing it — but it is not something
+to read as a propagating pulse.
+
+**One caveat on the echo time.** `2L/c` is a *delay*, not an instant: the echo
+reaches `x = 0` one round trip after the wave **left** it, which on this record
+is 1928 µs into the analysis window, not 1460. The code takes it from `P`'s own
+onset for exactly this reason. All output times — figure and `.dat` alike —
+are referred back to the **source file's** time base via `t0_file`.
 
 ### What this record cannot settle
 

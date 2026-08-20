@@ -83,6 +83,8 @@ def load_experiment(case, path=None):
         The dump.npz keys that a measured shot can honestly fill:
 
             t, dt, N              time base [ms], re-zeroed at the trim point
+            t0_file               where that zero sits in the FILE's own time
+                                  base [us], so results can be referred back
             eps_out, pos_out      (n_gauge, N) signals and their TAPE positions
             eps_in, pos_in        empty -- the input bar carries no gauge
             units                 'kN'; these are forces, not strains
@@ -114,6 +116,7 @@ def load_experiment(case, path=None):
                          f'for index {max([i_t] + list(cols.values()))}')
 
     t_us = raw[:, i_t]
+    t_us_full = t_us.copy()
     sig = np.array([raw[:, cols[n]] for n in names], float)
 
     dt_us = float(np.mean(np.diff(t_us)))
@@ -123,13 +126,20 @@ def load_experiment(case, path=None):
 
     trim = cfg.get('trim', {})
     if trim.get('baseline', True):
-        sig = _debias(sig, t_us)
-    sig, t_us = _trim(sig, t_us, dt_us,
-                      float(trim.get('threshold', 0.05)),
-                      float(trim.get('lead', 50.0)))
+        sig = _debias(sig, t_us, float(trim.get('baseline_before', 0.0)))
+    if 'start' in trim:
+        sig, t_us = _cut(sig, t_us, float(trim['start']))
+    else:
+        sig, t_us = _trim(sig, t_us, dt_us,
+                          float(trim.get('threshold', 0.05)),
+                          float(trim.get('lead', 50.0)))
 
     dt = dt_us / US_PER_MS
     n = sig.shape[1]
+    # Where the analysis t = 0 sits in the FILE's own time base. The trim moves
+    # it, and without this every time printed downstream is offset from the
+    # record the operator is looking at -- by 1638 us on the specimen shot.
+    t0_file = float(t_us_full[len(t_us_full) - n])
     bar = cfg['bar']
     L = float(bar['length'])
     d = dict(
@@ -144,7 +154,7 @@ def load_experiment(case, path=None):
         L_specimen=0.0,
         loading=str(cfg['loading']),
         eta=float(cfg['analysis']['eta']),
-        case=case, cfg=cfg, source=src,
+        case=case, cfg=cfg, source=src, t0_file=t0_file,
     )
     if d['eps_out'].shape[0] != len(d['pos_out']):
         raise ValueError(f'{case}: {d["eps_out"].shape[0]} channels but '
@@ -152,19 +162,49 @@ def load_experiment(case, path=None):
     return d
 
 
-def _debias(sig, t_us):
+def _debias(sig, t_us, before=0.0):
     """
     Remove each channel's pre-trigger mean.
 
-    The baseline is taken over t < 0, which is what the scope's own trigger
-    already defines and needs no threshold of its own. A record that begins at
-    t = 0 has no pre-trigger to average, and is left alone rather than being
-    de-biased against its own signal.
+    `before` is where the pre-trigger window ends. Zero -- the scope's own
+    trigger instant -- is the obvious default and needs no threshold of its own,
+    but it is only right when nothing happens before the trigger. It is NOT
+    right on a shot whose trigger fires late: 2026-08-20_PC_AFC.txt carries a
+    slow rise from -1138 us onward, so averaging over t < 0 would subtract a
+    fifth of a kN of real signal and call it an offset. Set
+    `baseline_before = -1200` there and the true noise floor, 5.9e-04 kN,
+    appears -- the same as every other channel on this rig.
+
+    A record with too little pre-trigger to average is left alone rather than
+    being de-biased against its own signal.
     """
-    pre = t_us < 0.0
+    pre = t_us < before
     if pre.sum() < 16:
         return sig
     return sig - sig[:, pre].mean(axis=1, keepdims=True)
+
+
+def _cut(sig, t_us, start):
+    """
+    Keep the record from an EXPLICIT time, and re-zero t.
+
+    The alternative to _trim's arrival detection, and the right choice whenever
+    the record is already quiescent where you want to start -- which is what
+    `separate` actually requires. Arrival detection exists to throw away a long
+    quiet lead-in; where that lead-in is not quiet, or where it is wanted,
+    saying so beats tuning a threshold against it.
+
+    Starting LATE is the trap. It looks tidy and it breaks the quiescence
+    assumption: cutting 2026-08-20_PC_AFC.txt at 500 us, just before its main
+    event, leaves the bar carrying a standing 0.13 kN and its own history, and
+    the free-end null goes from 3.1e-02 to 1.9e-01. Start where the record is
+    quiet, not where the interesting part begins.
+    """
+    i0 = int(np.searchsorted(t_us, start))
+    if i0 >= len(t_us) - 1:
+        raise ValueError(f'trim.start = {start} is at or past the end of the '
+                         f'record ({t_us[-1]})')
+    return sig[:, i0:].copy(), t_us[i0:] - t_us[i0]
 
 
 def _trim(sig, t_us, dt_us, threshold, lead_us):
