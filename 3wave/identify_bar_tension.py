@@ -880,15 +880,24 @@ for col, (bar, off, cnt) in enumerate(COLS):
     ax0.set_title(f'What was measured — {cnt} gauges on the {bar} bar',
                   loc='left', fontsize=11)
 
+    # Matched-filtered, not raw: the differentiated record is edge-timed by
+    # cross-correlating it against TEMPLATE (the leading edge cut from the
+    # reference gauge, above), and that correlation is what suppresses the
+    # sample-to-sample noise a raw gradient is full of. Same filter each
+    # arrival/echo search above already runs, just shown rather than only
+    # used, and normalised per gauge to its own peak like the original
+    # single-gauge version of this panel was.
     ax1 = axes[1, col]
     for j in range(cnt):
-        ax1.plot(t_null, bgrad[j], lw=.9, color=(BLUE, ORANGE)[j % 2],
+        xc = _xcorr(bgrad[j], TEMPLATE)
+        xc = xc / np.abs(xc).max()
+        ax1.plot(t_null, xc, lw=.9, color=(BLUE, ORANGE)[j % 2],
                  label=f'{names[off + j]}')
     ax1.axhline(0, color=GRID, lw=.8)
-    ax1.set_ylabel(f'd(signal)/dt ({USYM}/ms)')
-    ax1.set_title(f'Differentiated record at both {bar}-bar gauges — what the '
-                  'edge timing above is actually measured on', loc='left',
-                  fontsize=10)
+    ax1.set_ylabel('Edge filter (norm.)')
+    ax1.set_title(f'Matched-filtered edge record at both {bar}-bar gauges — '
+                  'what the edge timing above is actually measured on',
+                  loc='left', fontsize=10)
 
     # Vertical markers, on BOTH the raw and differentiated rows: the end of
     # the striker pulse (arrival + P) and the free-end echo (arrival + tau),
