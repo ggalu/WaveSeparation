@@ -144,6 +144,26 @@ if f'alpha_{BAR}' in ID.files and not ARGS.no_attenuation:
     ATT = (np.asarray(ID[f'alpha_f_{BAR}'], float),
            np.asarray(ID[f'alpha_{BAR}'], float))
 
+# --------------------------------------------------------------------------
+# the OTHER bar, when the identification covered both -- its own waves and
+# the force equilibrium across the shared interface, nothing more. It is
+# deliberately NOT run through checks()/free_end(): those assume THIS bar's
+# own far end is free, which holds for 'out' on this rig (an SHTB calibration
+# shot) but not for 'in', whose far end is the anvil. L_ref_{b} in
+# bar_identified.npz is also the ASSEMBLY-wide L_free_ref, duplicated per bar
+# for the c0 lookup -- not either bar's own length to its own free end -- so
+# free_end() would silently reconstruct nonsense if pointed at it here.
+# --------------------------------------------------------------------------
+OTHER = next((b for b in BARS if b != BAR), None)
+if OTHER is not None:
+    sig_o = list(d[f'eps_{OTHER}'])
+    c0_o = float(ID[f'c_{OTHER}'])
+    x_o = np.asarray(ID[f'x_{OTHER}'], float)
+    ATT_o = None
+    if f'alpha_{OTHER}' in ID.files and not ARGS.no_attenuation:
+        ATT_o = (np.asarray(ID[f'alpha_f_{OTHER}'], float),
+                np.asarray(ID[f'alpha_{OTHER}'], float))
+
 print(__doc__.split('---')[0].strip())
 print(f'\nrecord     : {d.get("source", "dump.npz")}')
 print(f'bar        : {BAR}, {L:.1f} mm, c0 = {c0:.2f} mm/ms, '
@@ -163,9 +183,15 @@ print(f'attenuation: ' + ('lossless (--no-attenuation)' if ARGS.no_attenuation
 # --------------------------------------------------------------------------
 # the reconstruction, and the checks on it
 # --------------------------------------------------------------------------
-def reconstruct(x):
-    """P, M and F = P + M at the contact plane, for one set of gauge positions."""
-    p, m = separate(t, sig, x, c0=c0, eta=eta, attenuation=ATT)
+def reconstruct(x, gsig=sig, gc0=c0, gatt=ATT):
+    """P, M and F = P + M at the contact plane, for one set of gauge positions.
+
+    gsig/gc0/gatt default to the primary BAR's own signals/c0/attenuation, so
+    every existing call site is unaffected; the OTHER bar's reconstruction
+    below passes its own instead, reusing this rather than repeating the
+    separate() call.
+    """
+    p, m = separate(t, gsig, x, c0=gc0, eta=eta, attenuation=gatt)
     return p, m, p + m
 
 
@@ -303,6 +329,18 @@ for name, x in SETS:
     RES[name] = dict(x=x, p=p, m=m, F=F, **checks(p, m, F))
     RES[name]['null'] = free_end(x)['rms']
 
+# The other bar's own waves at ITS face, and the force each side of the
+# interface implies -- should agree, since force is continuous across it.
+# |F_BAR - F_OTHER| / max|F_BAR| is wave_separation.specimen_response's own
+# `equilibrium` field, reused directly rather than through the rest of that
+# function's velocity/strain machinery, which assumes a deforming specimen.
+if OTHER is not None:
+    p_o, m_o, F_o = reconstruct(x_o, gsig=sig_o, gc0=c0_o, gatt=ATT_o)
+    _r0 = RES[SETS[0][0]]
+    _peak_eq = float(np.abs(_r0['F']).max())
+    equilibrium = np.abs(_r0['F'] - F_o) / (_peak_eq if _peak_eq > 0 else 1.0)
+    _win = slice(_r0['i_on'], _r0['i_end'])
+
 print('\n--- interface force, and the checks that need no ground truth '
       '-------')
 _last = f'{"after sep":>11}' if IMPACT else ''
@@ -347,6 +385,21 @@ if len(SETS) > 1:
           f'The forces they give\ndiffer by {dpk*100:.1f} % in peak and '
           f'{rel:.2e} relative L2 -- which is the measurement\nof how benign a '
           'common offset is, in place of the usual assertion that it is.')
+
+if OTHER is not None:
+    print(f'\n--- force equilibrium across the interface, {BAR} vs {OTHER} bar '
+          '-------')
+    print(f'{OTHER} bar    : c0 = {c0_o:.2f} mm/ms, x = '
+          f'[{", ".join(f"{v:.1f}" for v in x_o)}] mm ({len(sig_o)} gauges), '
+          'attenuation ' + ('lossless' if ATT_o is None else
+                            f'alpha(f) up to {ATT_o[0][-1]:.0f} kHz'))
+    print(f'|F_{BAR}-F_{OTHER}|/max|F_{BAR}| : mean {equilibrium[_win].mean():.4e}, '
+          f'max {equilibrium[_win].max():.4e}, over {t[_win.start]:.3f}-'
+          f'{t[min(_win.stop, N-1)]:.3f} ms')
+    print('a genuine joint carries the same force on both sides; what is left '
+          'is model\nerror -- most likely a small extra transit time through '
+          'the coupler that this\nreconstruction, treating each bar as if it '
+          'ran straight to the interface, does\nnot account for.')
 
 print('\n--- what the reconstruction says happened '
       '--------------------------------')
@@ -393,7 +446,13 @@ tt = t * 1e3
 T0_FIG = float(d.get('t0_file', 0.0))
 tt_f = tt + T0_FIG
 
-fig, axes = plt.subplots(3, 1, figsize=(11, 12), sharex=True)
+# Two extra panels -- the other bar's own waves, and the equilibrium residual
+# -- only when the identification covered both bars. I_ANS is "THE ANSWER"
+# panel's index either way, so everything below it needn't know which shape
+# this run is.
+N_ROWS = 5 if OTHER is not None else 3
+I_ANS = 3 if OTHER is not None else 2
+fig, axes = plt.subplots(N_ROWS, 1, figsize=(11, 4 * N_ROWS), sharex=True)
 fig.patch.set_facecolor(SURFACE)
 
 # --- what went in ---------------------------------------------------------
@@ -432,30 +491,61 @@ _pk = max(np.abs(r['p']).max(), np.abs(r['m']).max()) * SCALE
 axes[1].set_ylim(-1.25 * _pk, 1.55 * _pk)
 axes[1].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='upper left')
 
+# --- the OTHER bar's own waves, at ITS face -------------------------------
+if OTHER is not None:
+    axes[2].plot(tt_f, p_o * SCALE, color=BLUE, lw=.9,
+                 label=r'$P$  (leaving the contact, into the bar)')
+    axes[2].plot(tt_f, m_o * SCALE, color=ORANGE, lw=.9,
+                 label=r'$M$  (returning to the contact)')
+    axes[2].axhline(0, color=GRID, lw=.8)
+    axes[2].set_ylabel(f'Wave ({USYM})')
+    axes[2].set_title(f'The two waves separated at the {OTHER} bar\'s own face'
+                      + ('' if ATT_o is not None else '  (LOSSLESS)'),
+                      loc='left', fontsize=10)
+    _pk_o = max(np.abs(p_o).max(), np.abs(m_o).max()) * SCALE
+    axes[2].set_ylim(-1.25 * _pk_o, 1.55 * _pk_o)
+    axes[2].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='upper left')
+
 # --- the answer -----------------------------------------------------------
 for (name, _), col, ls in zip(SETS, (INK, BLUE), ('-', '--')):
-    axes[2].plot(tt_f, RES[name]['F'] * SCALE, color=col, lw=1.0, ls=ls,
-                 label=f'$F = P + M$, {name} positions')
-axes[2].axhline(0, color=GRID, lw=1.0)
+    axes[I_ANS].plot(tt_f, RES[name]['F'] * SCALE, color=col, lw=1.0, ls=ls,
+                     label=f'$F = P + M$, {name} positions')
+if OTHER is not None:
+    axes[I_ANS].plot(tt_f, F_o * SCALE, color=ORANGE, lw=1.0, ls=':',
+                     label=f'$F = P + M$, {OTHER} bar (own gauges)')
+axes[I_ANS].axhline(0, color=GRID, lw=1.0)
 band = 0.03 * r['amp'] * SCALE
-axes[2].axhspan(-band, band, color=BLUE, alpha=.15,
-                label='±3 % of peak $|P|$')
+axes[I_ANS].axhspan(-band, band, color=BLUE, alpha=.15,
+                    label='±3 % of peak $|P|$')
 if IMPACT:
-    axes[2].axvline(r['t_open'] + T0_FIG, color=ORANGE, lw=1.1, ls='--')
-    axes[2].annotate('  bars part', (r['t_open'] + T0_FIG, r['peak'] * SCALE * .6),
-                     fontsize=9, color=MUTED)
-axes[2].set_xlabel('Time (us)')
-axes[2].set_ylabel(f'Interface force ({UNITS})')
-axes[2].set_title(f'THE ANSWER — force at the {IFACE}.'
-                  + (' A bonded joint may carry either sign; the unilateral '
-                     'check does not apply'
-                     if TENSION else
-                     ' It cannot go negative (a dry contact does not pull): '
-                     f'residual {r["tensile"]:.3f} of peak')
-                  + ('' if ATT is not None else '  (LOSSLESS)'),
-                  loc='left', fontsize=10)
-axes[2].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
-axes[2].set_xlim(tt_f[0], tt_f[int(0.95 * N)])
+    axes[I_ANS].axvline(r['t_open'] + T0_FIG, color=ORANGE, lw=1.1, ls='--')
+    axes[I_ANS].annotate('  bars part', (r['t_open'] + T0_FIG,
+                                        r['peak'] * SCALE * .6),
+                         fontsize=9, color=MUTED)
+axes[I_ANS].set_xlabel('Time (us)')
+axes[I_ANS].set_ylabel(f'Interface force ({UNITS})')
+axes[I_ANS].set_title(f'THE ANSWER — force at the {IFACE}.'
+                      + (' A bonded joint may carry either sign; the unilateral '
+                         'check does not apply'
+                         if TENSION else
+                         ' It cannot go negative (a dry contact does not pull): '
+                         f'residual {r["tensile"]:.3f} of peak')
+                      + ('' if ATT is not None else '  (LOSSLESS)'),
+                      loc='left', fontsize=10)
+axes[I_ANS].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
+axes[I_ANS].set_xlim(tt_f[0], tt_f[int(0.95 * N)])
+
+# --- equilibrium across the interface, BAR vs OTHER -----------------------
+if OTHER is not None:
+    axes[4].plot(tt_f, equilibrium, color=INK, lw=.9)
+    axes[4].axhline(0, color=GRID, lw=.8)
+    for _b in (tt_f[_win.start], tt_f[min(_win.stop, N - 1)]):
+        axes[4].axvline(_b, color=ORANGE, lw=1.1, ls='--')
+    axes[4].set_xlabel('Time (us)')
+    axes[4].set_ylabel(f'|F_{BAR} - F_{OTHER}| / max|F_{BAR}|')
+    axes[4].set_title(f'Equilibrium residual — mean {equilibrium[_win].mean():.3e}, '
+                      f'max {equilibrium[_win].max():.3e} in the analysis window',
+                      loc='left', fontsize=10)
 
 for ax in axes:
     ax.set_facecolor(SURFACE); ax.grid(True, color=GRID, lw=.7, alpha=.8)
@@ -479,10 +569,13 @@ print(f'\nwrote {FIG}')
 
 DAT = (f'{_stem}.dat' if ATT is not None else f'{_stem}_lossless.dat')
 T0 = float(d.get('t0_file', 0.0))
-np.savetxt(DAT,
-           np.column_stack([tt + T0, RES[SETS[0][0]]['F'], RES[SETS[0][0]]['p'],
-                            RES[SETS[0][0]]['m']]),
-           header=f'time[us]  F_interface[{UNITS}]  P[{UNITS}]  M[{UNITS}]\n'
+_cols = [tt + T0, RES[SETS[0][0]]['F'], RES[SETS[0][0]]['p'], RES[SETS[0][0]]['m']]
+_header = f'time[us]  F_interface[{UNITS}]  P[{UNITS}]  M[{UNITS}]'
+if OTHER is not None:
+    _cols += [F_o, equilibrium]
+    _header += f'  F_{OTHER}[{UNITS}]  equilibrium'
+np.savetxt(DAT, np.column_stack(_cols),
+           header=_header + '\n'
                   f'time is the SOURCE FILE\'s own base (analysis t=0 sits at '
                   f'{T0:.1f} us there)\n'
                   f'{BAR} bar, c0={c0:.3f} mm/ms, x={[round(float(v), 2) for v in x_id]} mm, '

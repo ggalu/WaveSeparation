@@ -23,6 +23,9 @@ interface_force_experiment_pc_specimen_lossless.dat
 interface_force_experiment_pc_specimen_lossless.png
 interface_force_experiment_pc_specimen.png
 bar_identification_experiment_pc_bar.png
+bar_identification_experiment_tension_bar_2.png
+bar_equilibrium_experiment_tension_bar_2.dat
+bar_equilibrium_experiment_tension_bar_2.png
 gauges_at_interface.png
 
 # superseded output formats, in case an older revision is ever run here
