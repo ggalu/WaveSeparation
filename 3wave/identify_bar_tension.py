@@ -852,89 +852,73 @@ print(f'\nwrote {IDENT_FILE}: c0={c0_id:.1f} for {", ".join(BARS)}')
 import matplotlib.pyplot as plt   # backend already chosen by plotting.init
 
 BLUE, ORANGE, INK, MUTED, GRID = '#2a78d6', '#eb6834', '#0b0b0b', '#52514e', '#d8d7d3'
-# Four panels, not two. The top pair share the edge-timing time window; the
-# bottom pair show the free-end null over its own, much longer, window -- so
-# sharex is set per pair rather than across the figure.
-fig, axes = plt.subplots(4, 1, figsize=(13, 13))
-fig.patch.set_facecolor('#fcfcfb')
-axes[1].sharex(axes[0])
-axes[3].sharex(axes[2])
+SURFACE = '#fcfcfb'
 
-k = REF
-axes[0].plot(t, signals[k] * SCALE, color=BLUE, lw=.9)
-axes[0].set_ylabel(f'Signal ({USYM})')
-axes[0].set_title(
-    (f'Measured shot at gauge {names[k]} — {d["source"].rsplit("/", 1)[-1]}'
-     if EXPERIMENT else
-     f'Calibration shot at gauge {names[k]} — 1097 us pulse, so the echo '
-     'overlaps the direct pulse'), loc='left', fontsize=11)
+# One column per bar -- in, out -- three rows each: what was measured, its
+# derivative (the edges everything above is actually timed on), and F = P+M
+# reconstructed from THAT bar's own two gauges alone, at ITS OWN interface.
+# All three rows share `t_null` (see above: the record truncated before the
+# earliest clip onset, for a measured shot) so a clipped tail cannot leak into
+# the reconstruction the same way it cannot leak into the free-end null.
+COLS = [(b, off, cnt) for b, off, cnt in
+        (('in', 0, n_in), ('out', n_in, len(names) - n_in)) if cnt >= 2]
+fig, axes = plt.subplots(3, len(COLS), figsize=(9.5 * len(COLS), 12),
+                         sharex=True, squeeze=False)
+fig.patch.set_facecolor(SURFACE)
 
-axes[1].plot(t, _xcorr(grads[k], TEMPLATE) / np.abs(_xcorr(grads[k], TEMPLATE)).max(),
-             color=INK, lw=.9)
-for lab, tt, col in (('arrival', arrival[k], ORANGE),
-                     ('trailing edge P', arrival[k] + P, MUTED),
-                     ('free-end echo', arrival[k] + tau[k], ORANGE)):
-    if not np.isnan(tt):
-        axes[1].axvline(tt, color=col, lw=1.1, ls='--')
-        axes[1].annotate(lab, (tt, 1.0), rotation=90, fontsize=8,
-                         color=MUTED, va='top', ha='right')
-axes[1].axhline(0, color=GRID, lw=.8)
-axes[1].set_xlabel('Time (ms)'); axes[1].set_ylabel('Edge filter (norm.)')
-axes[1].set_title('Differentiated record, matched against the leading edge — '
-                  'edges are timed, not pulses', loc='left', fontsize=11)
-axes[1].set_xlim(0, min(t[-1], arrival[k] + 2.2 * P))
+for col, (bar, off, cnt) in enumerate(COLS):
+    idx = slice(off, off + cnt)
+    bsig = sig_null[idx]
+    bgrad = [g[:_hi_null] for g in grads[idx]]
+    bx = id_pos[idx]
 
-# --- the free-end null, made visible ---------------------------------------
-# Two panels rather than one with two y-scales: the waves are ~1000 ustrain and
-# their sum is ~1, so a shared axis would render the sum as a flat line on zero
-# and prove nothing. Separate panels let each be read at its own scale. Plotted
-# over t_null, which is the full record except for a measured shot with a
-# clipped tail, where it stops before the earliest clip onset -- see the
-# free-end null test above for why `separate` itself must not see that tail.
-axes[2].plot(t_null, p_free * SCALE, color=BLUE, lw=.9,
-            label=r'$\varepsilon_+$ (incident)')
-axes[2].plot(t_null, m_free * SCALE, color=ORANGE, lw=.9,
-            label=r'$\varepsilon_-$ (reflected)')
-axes[2].set_ylabel(f'Signal ({USYM})')
-axes[2].set_title('Waves reconstructed AT the free surface — a free end inverts, '
-                  'so these should be mirror images', loc='left', fontsize=11)
-# upper LEFT: the record is quiescent before the first arrival, so the legend
-# cannot collide with a trace there. Upper right is where the waves peak.
-axes[2].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='upper left')
+    ax0 = axes[0, col]
+    for j in range(cnt):
+        ax0.plot(t_null, bsig[j] * SCALE, lw=.9, color=(BLUE, ORANGE)[j % 2],
+                 label=f'{names[off + j]} at {bx[j]:.0f} mm (identified)')
+    ax0.set_ylabel(f'Signal ({USYM})')
+    ax0.set_title(f'What was measured — {cnt} gauges on the {bar} bar',
+                  loc='left', fontsize=11)
+    ax0.legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
 
-_NULL_OK = _i1 > _i0
-_band = NULL_TOL * _amp * SCALE
-if _NULL_OK:
-    axes[3].axhspan(-_band, _band, color=BLUE, alpha=.18,
-                    label=f'pass threshold ±{NULL_TOL:.1e} × peak |ε₊|')
-axes[3].plot(t_null, _total * SCALE, color=INK, lw=.9,
-             label=r'$\varepsilon_+ + \varepsilon_-$  (= stress / E)')
-axes[3].axhline(0, color=GRID, lw=.8)
-if _NULL_OK:
-    for _b in (t_null[_i0], t_null[_i1 - 1]):  # the window the rms is taken over
-        axes[3].axvline(_b, color=ORANGE, lw=1.1, ls='--')
-    # bottom, not top: the legend owns the top-left corner of this panel
-    axes[3].annotate('analysis window', (t_null[_i0], 0.04), xytext=(4, 0),
-                     textcoords='offset points', fontsize=8, color=MUTED,
-                     xycoords=('data', 'axes fraction'), va='bottom')
-axes[3].set_xlabel('Time (ms)'); axes[3].set_ylabel(f'Signal ({USYM})')
-axes[3].set_title(
-    (f'Free-surface stress — rms {null_rms:.2e} of peak |ε₊|, '
-     f'{"PASS" if null_rms <= NULL_TOL else "FAIL"}. Outside the window the '
-     'record truncates' if _NULL_OK else
-     'Free-surface stress — cannot be evaluated: no window clear of both the '
-     'record start and\nthe clipped tail exists at every gauge at once'),
-    loc='left', fontsize=11)
-axes[3].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='upper left')
-# Scale to the residual inside the window, not to the truncation spike outside
-# it, which is ~200x larger and would flatten everything worth seeing. With no
-# window at all, fall back to the whole (clip-free) record instead.
-_r = np.abs(_total[_w]).max() * SCALE if _NULL_OK else np.abs(_total).max() * SCALE
-axes[3].set_ylim(-3 * _r, 3 * _r)
-axes[2].set_xlim(0, t_null[-1]); axes[3].set_xlim(0, t_null[-1])
+    ax1 = axes[1, col]
+    for j in range(cnt):
+        ax1.plot(t_null, bgrad[j], lw=.9, color=(BLUE, ORANGE)[j % 2],
+                 label=f'{names[off + j]}')
+    ax1.axhline(0, color=GRID, lw=.8)
+    ax1.set_ylabel(f'd(signal)/dt ({USYM}/ms)')
+    ax1.set_title(f'Differentiated record at both {bar}-bar gauges — what the '
+                  'edge timing above is actually measured on', loc='left',
+                  fontsize=10)
+    ax1.legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='upper left')
 
-for ax in axes:
-    ax.set_facecolor('#fcfcfb'); ax.grid(True, color=GRID, lw=.7, alpha=.8)
+    # F = P + M at x = 0, from this bar's own two gauges only -- exactly
+    # `reconstruct_interface.py`'s per-bar panel, reusing whatever alpha(f)/
+    # c_p(f) this run just identified for this bar (ATT.get(bar) is None
+    # whenever [.attenuation] is not configured, or the fit was not
+    # measurable -- see the direction note in identify_attenuation.py).
+    fit = ATT.get(bar)
+    gatt = fit['table'] if fit is not None else None
+    gdisp = fit['dispersion_table'] if fit is not None else None
+    p_b, m_b = separate(t_null, bsig, bx, c0=c0_id, eta=d['eta'],
+                        attenuation=gatt, dispersion=gdisp)
+    F_b = p_b + m_b
+
+    ax2 = axes[2, col]
+    ax2.plot(t_null, F_b * SCALE, color=INK, lw=.9,
+             label='$F = P + M$, identified positions')
+    ax2.axhline(0, color=GRID, lw=1.0)
+    ax2.set_xlabel('Time (ms)')
+    ax2.set_ylabel(f'Interface force ({USYM})')
+    ax2.set_title(f'F = P + M at the {bar}put-bar/specimen interface'
+                  + ('' if gatt is not None else '  (LOSSLESS)'),
+                  loc='left', fontsize=10)
+    ax2.legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
+
+axes[0, 0].set_xlim(0, t_null[-1])
+
+for ax in axes.flat:
+    ax.set_facecolor(SURFACE); ax.grid(True, color=GRID, lw=.7, alpha=.8)
     ax.set_axisbelow(True)
     for sp in ('top', 'right'): ax.spines[sp].set_visible(False)
     for sp in ('left', 'bottom'): ax.spines[sp].set_color(GRID)
@@ -942,7 +926,10 @@ for ax in axes:
     ax.xaxis.label.set_color(MUTED); ax.yaxis.label.set_color(MUTED)
     ax.title.set_color(INK)
 
-fig.tight_layout()
+fig.suptitle('Per-bar identification check — each column reconstructed from '
+             'ONLY that bar\'s own two gauges', x=.006, ha='left', fontsize=13,
+             color=INK)
+fig.tight_layout(rect=(0, 0, 1, .97))
 FIG = f'bar_identification_{CASE}.png' if EXPERIMENT \
     else 'bar_identification_tension.png'
 fig.savefig(FIG, dpi=140, facecolor=fig.get_facecolor())
