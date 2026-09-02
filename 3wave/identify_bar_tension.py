@@ -135,27 +135,38 @@ _ap.add_argument('--l-free-ref-tol', type=float, metavar='MM',
                  dest='L_free_ref_tol',
                  help='what the tape is good to [mm]. Overrides L_free_ref_tol. '
                       'Propagated to every result below.')
+_ap.add_argument('--experiment', metavar='CASE', default=None,
+                 help='identify a MEASURED shot named by a config case (e.g. '
+                      'experiment_tension_bar) instead of the simulated '
+                      'calibration dump. There is no ground truth then, so the '
+                      'true/error columns print a dash.')
 HEADLESS, ARGS = plotting.init(parser=_ap)   # picks the backend; precedes pyplot
 
 import config
 from dump import load_dump
 from wave_separation import separate
 
+CASE = ARGS.experiment or 'calibration_tension'
+EXPERIMENT = CASE in config.EXPERIMENT_CASES
+
 # --------------------------------------------------------------------------
 # The measurements a tape and a scale supply. Bar lengths are easy; the gauge
 # positions are not, and are never read here -- they are what is recovered.
 # --------------------------------------------------------------------------
-cfg = config.load('calibration_tension')
+cfg = config.load(CASE)
 
 # The whole identification models the bolted-together assembly as ONE uniform
 # bar of speed c0 -- that is what makes the echo train readable at all. So the
 # two bar tables must agree here, even though config.toml keeps them separate
 # for the compression case's sake. Refuse rather than quietly average them.
+# A measured shot's bar tables need not carry E/rho at all (only length and
+# diameter matter to the identification), so only keys present on BOTH sides
+# are compared.
 _IN_BAR, _OUT_BAR = cfg['input_bar'], cfg['output_bar']
 for _k in ('E', 'rho', 'diameter'):
-    if _IN_BAR[_k] != _OUT_BAR[_k]:
+    if _k in _IN_BAR and _k in _OUT_BAR and _IN_BAR[_k] != _OUT_BAR[_k]:
         raise SystemExit(
-            f"[calibration_tension.input_bar] and [calibration_tension.output_bar] "
+            f"[{CASE}.input_bar] and [{CASE}.output_bar] "
             f"disagree on {_k!r} ({_IN_BAR[_k]} vs {_OUT_BAR[_k]}).\n"
             "This script identifies ONE uniform bar from its echo train; two "
             "different bars\nwould need a different method entirely. Make the "
@@ -216,15 +227,35 @@ def _extremum(c, lo, hi, sign):
     return i + _refine(c * sign, i), c[i]
 
 
-def _rise_index(g, frac=0.3):
+def _rise_index(g, frac=0.3, hi=None):
     """First sample of the leading edge, from the differentiated record."""
-    return int(np.argmax(np.abs(g) > frac * np.abs(g).max()))
+    a = np.abs(g) if hi is None else np.abs(g[:hi])
+    return int(np.argmax(a > frac * a.max()))
+
+
+def _rise_time(g, dt):
+    """
+    10-90 % rise time of the leading edge, in ms.
+
+    EDGE_MS is hardcoded to the SIMULATED rig's ~59 us edge everywhere below
+    except for a measured (EXPERIMENT) shot, where it is measured from the
+    record instead -- a real bar's edge need not match the model's.
+    """
+    a = np.abs(g)
+    pk = a.max()
+    i_pk = int(np.argmax(a))
+    i_lo = int(np.argmax(a[:i_pk + 1] > 0.1 * pk)) if i_pk else 0
+    return max((i_pk - i_lo), 1) * dt
 
 
 # --------------------------------------------------------------------------
 # load, differentiate
 # --------------------------------------------------------------------------
-d = load_dump()
+if EXPERIMENT:
+    from experiment import load_experiment
+    d = load_experiment(CASE)
+else:
+    d = load_dump()
 if d['loading'] != 'tension':
     raise SystemExit(
         f"this dump is a {d['loading']} shot; identify_bar_tension.py reads the "
@@ -238,17 +269,53 @@ signals = [d['eps_in'][k] for k in range(n_in)] + \
           [d['eps_out'][k] for k in range(d['eps_out'].shape[0])]
 grads = [np.gradient(s, dt) for s in signals]
 true_pos = list(d['pos_in']) + list(d['pos_out'])   # gauge -> its own bar face
+_ref_lbl = 'tape' if EXPERIMENT else 'true'
+# A dump carries strain; a measured record carries whatever the conditioner
+# was calibrated in (force, here) -- print and scale accordingly rather than
+# assuming ustrain.
+UNITS = d.get('units', 'strain')
+SCALE, USYM = (1.0, UNITS) if EXPERIMENT else (1e6, 'ustrain')
+PKFMT = '10.4g' if EXPERIMENT else '10.1f'
 
 print(__doc__.split('---')[0].strip())
+if EXPERIMENT:
+    print(f'\nMEASURED shot     : {d["source"]}')
+    print('no ground truth   : the true/error columns print a dash. The only '
+          'checks are\n                    internal -- the Q spread across '
+          'gauges, and the free-end null.')
 print(f'\nrecord            : {N} samples at {dt*1e3:.4f} us  ({t[-1]:.3f} ms)')
 print(f'tape measurements : assembly {L_ASSEMBLY:.1f} mm, output bar '
       f'{L_OUTPUT:.1f} mm, joint {L_JOINT:.1f} mm, diameter {DIAMETER:.2f} mm')
 print(f'gauges            : {len(names)}, positions NOT read from config')
 
-# The leading edge is ~59 us wide (10-90 %) on this rig. The template spans a
-# little more than that: long enough for a sharp correlation peak, short enough
-# that two edges 0.1 ms apart still resolve into two peaks.
-EDGE_MS = 0.12
+# An amplifier rail is not signal. HI[k] is the last usable sample index for
+# gauge k -- unbounded (N) for a simulated dump, or a channel that never
+# clips -- and every search below stays clear of it, so a clip transition (the
+# sharpest thing left in a record once real edges are gone) cannot be mistaken
+# for one.
+if EXPERIMENT:
+    _CLIP_MARGIN = 0.05                          # ms, vs. a rail's ~1-sample edge
+    HI = np.array([
+        N if np.isnan(co) else max(1, int((co - _CLIP_MARGIN) / dt))
+        for co in d['clip_onset']])
+    for nm, co, hi in zip(names, d['clip_onset'], HI):
+        if not np.isnan(co):
+            print(f'{"":18}  {nm} clips from {co*1e3:.1f} us '
+                  f'(t={t[hi]:.3f} ms kept)')
+else:
+    HI = np.full(len(names), N)
+
+# The leading edge is ~59 us wide (10-90 %) on the SIMULATED rig; that width is
+# tuned to the lumped-mass model, not to a real bar, so a MEASURED shot
+# self-measures it instead -- from whichever gauge is sharpest, bounded clear
+# of any clipping. The template spans a little more than that: long enough for
+# a sharp correlation peak, short enough that two edges 0.1 ms apart still
+# resolve into two peaks.
+if EXPERIMENT:
+    EDGE_MS = max(3.0 * min(_rise_time(g[:hi], dt)
+                            for g, hi in zip(grads, HI)), 4 * dt)
+else:
+    EDGE_MS = 0.12
 n_t = int(round(EDGE_MS / dt))
 
 # --------------------------------------------------------------------------
@@ -256,14 +323,14 @@ n_t = int(round(EDGE_MS / dt))
 # --------------------------------------------------------------------------
 # One common template, taken from whichever gauge the wave reaches first, so
 # every lag is measured against the same feature.
-i_first = int(np.argmin([_rise_index(g) for g in grads]))
-ir = _rise_index(grads[i_first])
+i_first = int(np.argmin([_rise_index(g, hi=HI[k]) for k, g in enumerate(grads)]))
+ir = _rise_index(grads[i_first], hi=HI[i_first])
 TEMPLATE = grads[i_first][ir - n_t // 4: ir + 3 * n_t // 4]
 
 arrival = []
-for g in grads:
+for k, g in enumerate(grads):
     c = _xcorr(g, TEMPLATE)
-    i, _ = _extremum(c, 0, len(c), +1)
+    i, _ = _extremum(c, 0, HI[k], +1)
     arrival.append(i * dt)
 arrival = np.array(arrival)
 
@@ -276,11 +343,14 @@ print(f'\nreference gauge   : {names[REF]} (earliest arrival -> longest '
 # --------------------------------------------------------------------------
 # the two negative edges: the striker's trailing edge, and the free-end echo
 # --------------------------------------------------------------------------
-def candidates(g, t_direct, n_want=4):
+def candidates(g, t_direct, hi=None, n_want=4):
     """Delays of the strongest negative edges after the direct arrival."""
     c = _xcorr(g, TEMPLATE)
     work = c.copy()
     work[:int((t_direct / dt) + 1.5 * n_t)] = 0.0
+    if hi is not None:
+        work[hi:] = 0.0     # a clipped correlation output, zeroed after the
+                            # fact -- not fed back into anything
     out = []
     for _ in range(n_want):
         i, v = _extremum(work, 0, len(work), -1)
@@ -291,7 +361,8 @@ def candidates(g, t_direct, n_want=4):
     return sorted(out)
 
 
-cands = [candidates(g, a) for g, a in zip(grads, arrival)]
+cands = [candidates(g, a, hi=HI[k])
+        for k, (g, a) in enumerate(zip(grads, arrival))]
 
 # P is the delay common to EVERY gauge; the echo delay is not. Nothing about the
 # striker has to be known for this -- it falls out of the comparison.
@@ -305,8 +376,19 @@ for cand, _ in [c for cs in cands for c in cs]:
     if len(hits) > best:
         best, P = len(hits), float(np.median(hits))
 if P is None or best < 2:
-    raise SystemExit('no pulse length shared by at least two gauges; '
-                     'check the record')
+    msg = 'no pulse length shared by at least two gauges; check the record'
+    if EXPERIMENT:
+        rows = '\n'.join(
+            f'  {nm:>7}  clips from '
+            + ('never' if np.isnan(co) else f'{co*1e3:.1f} us')
+            for nm, co in zip(names, d['clip_onset']))
+        msg += ('\n\nEvery search above was kept clear of each channel\'s own '
+               'clipped tail:\n' + rows + '\n\nIf the clip onset sits earlier '
+               'than the striker pulse length or the free-end\necho would be '
+               'expected on this geometry, the record may simply not contain '
+               'them in\nclean form at any gauge -- that is a property of '
+               'this shot, not a bug here.')
+    raise SystemExit(msg)
 
 tau = []
 for cs in cands:
@@ -321,10 +403,10 @@ print('\n--- edges, per gauge '
       '------------------------------------------------------')
 print(f'{"gauge":>7} {"peak":>10} {"arrival":>9} {"lag vs ref":>11} '
       f'{"2L_free/c0":>10}')
-print(f'{"":>7} {"[ustrain]":>10} {"[ms]":>9} {"[us]":>11} {"[ms]":>10}')
+print(f'{"":>7} {"[" + USYM + "]":>10} {"[ms]":>9} {"[us]":>11} {"[ms]":>10}')
 for k, nm in enumerate(names):
     tk = '  merged' if np.isnan(tau[k]) else f'{tau[k]:10.5f}'
-    print(f'{nm:>7} {np.abs(signals[k]).max()*1e6:10.1f} {arrival[k]:9.4f} '
+    print(f'{nm:>7} {np.abs(signals[k]).max()*SCALE:{PKFMT}} {arrival[k]:9.4f} '
           f'{lag[k]*1e3:11.4f} {tk}')
 
 # --------------------------------------------------------------------------
@@ -345,7 +427,22 @@ Q = tau + 2.0 * lag
 ok = ~np.isnan(Q)
 ok &= np.abs(Q - np.median(Q[ok])) < 0.01 * np.median(Q[ok])
 if ok.sum() < 1:
-    raise SystemExit('no gauge gave a usable free-end echo')
+    msg = 'no gauge gave a usable free-end echo'
+    if EXPERIMENT:
+        rows = '\n'.join(
+            f'  {nm:>7}  tau={tau[k]*1e3:8.1f} us  Q={Q[k]*1e3:9.1f} us  '
+            + ('clips from ' + f'{d["clip_onset"][k]*1e3:.1f} us'
+               if not np.isnan(d['clip_onset'][k]) else 'never clips')
+            for k, nm in enumerate(names))
+        msg += ('\n\nEach gauge found A negative edge after P and called it '
+               'the free-end echo,\nbut Q = tau + 2*lag disagrees between '
+               f'gauges (should be identical):\n{rows}\n\nEvery search stayed '
+               'clear of each channel\'s own clipped tail; a spread this large '
+               'means\nwhat was found there is not a shared echo, not that '
+               'the search leaked into\nclipped data. If the geometry puts '
+               'the true free-end echo later than every\nchannel\'s clip '
+               'onset, it simply is not in this record in usable form.')
+    raise SystemExit(msg)
 Q_MEAN = float(np.mean(Q[ok]))
 
 # L_FREE_REF is THE tape measurement -- the one length the experiment cannot
@@ -355,10 +452,19 @@ Q_MEAN = float(np.mean(Q[ok]))
 # supply it and a rig cannot, so relying on it makes this a self-check rather
 # than an instrument. Nothing else below consults the true geometry except the
 # error columns.
-X_TOTAL = d['X_OUT'] + d['L_free_out']
-_x_ref = (d['X_IN'] - d['pos_in'][REF]) if REF < n_in else \
-         (d['X_OUT'] + d['pos_out'][REF - n_in])
-L_FREE_REF_TRUE = X_TOTAL - _x_ref
+if EXPERIMENT:
+    # load_experiment carries no absolute mesh coordinates (X_IN/X_OUT are a
+    # simulator bookkeeping detail); the tape positions and the assembly
+    # geometry give the same answer algebraically: L_free_ref_true is the
+    # reference gauge's own distance to the free end, going the long way round
+    # through the joint for an input-bar reference.
+    L_FREE_REF_TRUE = (d['pos_in'][REF] + L_JOINT + L_OUTPUT if REF < n_in
+                       else L_OUTPUT - d['pos_out'][REF - n_in])
+else:
+    X_TOTAL = d['X_OUT'] + d['L_free_out']
+    _x_ref = (d['X_IN'] - d['pos_in'][REF]) if REF < n_in else \
+             (d['X_OUT'] + d['pos_out'][REF - n_in])
+    L_FREE_REF_TRUE = X_TOTAL - _x_ref
 
 if L_FREE_REF_CFG is None:
     L_FREE_REF = L_FREE_REF_TRUE
@@ -413,8 +519,12 @@ for k, nm in enumerate(names):
 print(f'  mean {Q_MEAN:.5f} ms over {ok.sum()} gauges, '
       f'spread {np.ptp(Q[ok])*1e3:.3f} us ({np.ptp(Q[ok])/Q_MEAN:.1e})')
 print(f'\nc0 = 2 L_free_ref / Q : {c0_id:.3f} mm/ms')
-print(f'c0 true               : {d["c0_in"]:.3f} mm/ms   '
-      f'rel err {(c0_id/d["c0_in"]-1):+.2e}')
+if EXPERIMENT:
+    print(f'c0 {_ref_lbl}               : —   (no ground truth for a '
+          'measured shot)')
+else:
+    print(f'c0 true               : {d["c0_in"]:.3f} mm/ms   '
+          f'rel err {(c0_id/d["c0_in"]-1):+.2e}')
 print(f'tape contributes      : +-{L_FREE_REF_TOL/L_FREE_REF:.1e} '
       f'(+-{c0_id*L_FREE_REF_TOL/L_FREE_REF:.2f} mm/ms), which dominates '
       f'everything else')
@@ -437,14 +547,14 @@ L_free_band = L_FREE_REF_TOL * L_free / L_FREE_REF
 print('\n--- gauge positions '
       '-------------------------------------------------------')
 print(f'{"gauge":>7} {"L_free (to end)":>18} {"x (from face)":>15} '
-      f'{"+-tape":>8} {"true":>9} {"error":>9}')
+      f'{"+-tape":>8} {_ref_lbl:>9} {"error":>9}')
 for k, nm in enumerate(names):
     print(f'{nm:>7} {L_free[k]:18.2f} {id_pos[k]:15.2f} {L_free_band[k]:8.2f} '
           f'{true_pos[k]:9.2f} {id_pos[k]-true_pos[k]:+9.3f}')
 
 print('\n--- gauge spacing D '
       '-------------------------------------------------------')
-print(f'{"bar":>7} {"lag [us]":>12} {"D = c0 dt":>12} {"true":>9} {"error":>9}')
+print(f'{"bar":>7} {"lag [us]":>12} {"D = c0 dt":>12} {_ref_lbl:>9} {"error":>9}')
 for bar, off, cnt in (('in', 0, n_in), ('out', n_in, len(names) - n_in)):
     if cnt < 2:
         continue
@@ -489,7 +599,7 @@ if n_pair:
     print('nothing above assumed the pairs are symmetric. This is what they '
           'actually are:\n')
     print(f'{"pair":>7} {"input x":>10} {"output x":>10} {"asymmetry":>11} '
-          f'{"true":>9}')
+          f'{_ref_lbl:>9}')
     for k in range(n_pair):
         a, b = id_pos[k], id_pos[n_in + k]
         ta, tb = true_pos[k], true_pos[n_in + k]
@@ -505,10 +615,15 @@ print('separate() depends on x_k/c0 only. Note these do NOT inherit the tape\n'
       'does not scale, so a tape error moves them absolutely. What IS\n'
       'scale-free is L_free/c0 -- the free-end null below tests exactly that,\n'
       'and nothing else.\n')
-print(f'{"gauge":>7} {"x/c0 [us]":>12} {"true [us]":>12} {"rel err":>10}')
+print(f'{"gauge":>7} {"x/c0 [us]":>12} {f"{_ref_lbl} [us]":>12} '
+      f'{"rel err":>10}')
 for k, nm in enumerate(names):
-    a, b = id_pos[k] / c0_id, true_pos[k] / d['c0_in']
-    print(f'{nm:>7} {a*1e3:12.4f} {b*1e3:12.4f} {a/b-1:+10.2e}')
+    a = id_pos[k] / c0_id
+    if EXPERIMENT:
+        print(f'{nm:>7} {a*1e3:12.4f} {"—":>12} {"—":>10}')
+    else:
+        b = true_pos[k] / d['c0_in']
+        print(f'{nm:>7} {a*1e3:12.4f} {b*1e3:12.4f} {a/b-1:+10.2e}')
 
 # --------------------------------------------------------------------------
 # free-end null test -- the only check here that needs no ground truth
@@ -542,10 +657,25 @@ for k, nm in enumerate(names):
 # Note the third argument: `separate` calls its positions x and phases them with
 # the wavenumber xi. Here they are L_free, distances from the FREE END rather
 # than from a bar face, which is what moves the reconstruction to that surface.
-NULL_WINDOW = cfg.get('null_window', 0.75)
-NULL_TOL = cfg.get('null_tol', 5.0e-3)
+if EXPERIMENT:
+    NULL_WINDOW = cfg.get('null', {}).get('window', 0.75)
+    NULL_TOL = cfg.get('null', {}).get('tol', 5.0e-3)
+else:
+    NULL_WINDOW = cfg.get('null_window', 0.75)
+    NULL_TOL = cfg.get('null_tol', 5.0e-3)
 
-p_free, m_free = separate(t, signals, L_free, c0=c0_id, eta=d['eta'])
+# `separate` is a GLOBAL fit -- one FFT of the whole record per gauge -- so a
+# clipped tail anywhere in the input corrupts P(w)/M(w) everywhere, not just at
+# the times it occupies. Windowing only the RESIDUAL check afterward would not
+# fix that; the record fed to `separate` itself must end before the earliest
+# clip onset across every gauge that contributes to it. (The edge-timing
+# searches above do not have this problem -- `_xcorr` is a genuine local
+# correlation, not a single whole-record transform.)
+_hi_null = int(np.min(HI)) if EXPERIMENT else N
+t_null = t[:_hi_null]
+sig_null = [s[:_hi_null] for s in signals]
+
+p_free, m_free = separate(t_null, sig_null, L_free, c0=c0_id, eta=d['eta'])
 _total = p_free + m_free
 _amp = np.abs(p_free).max()
 
@@ -553,49 +683,71 @@ _amp = np.abs(p_free).max()
 # amplifies the truncation at the end of the record, and over the FULL record
 # the residual comes out ~100x larger than it really is -- 1.2e-01 against
 # 1.2e-03 on a calibration that is in fact good. Start at the first arrival at
-# the free end; stop before the truncation.
+# the free end; stop before the truncation (and, for a measured shot, before
+# whichever comes first: that truncation or the clipped tail).
 _i0 = int(np.argmax(np.abs(p_free) > 0.02 * _amp))
-_i1 = int(NULL_WINDOW * N)
+_i1 = min(int(NULL_WINDOW * N), len(t_null))
 _w = slice(_i0, _i1)
-null_rms = float(np.sqrt(np.mean(_total[_w] ** 2)) / _amp)
-null_max = float(np.abs(_total[_w]).max() / _amp)
 
 print('\n--- free-end null test (no ground truth used) '
       '-----------------------------')
-print(f'reconstructed at the free surface from all {len(names)} gauges, '
-      f'{t[_i0]:.2f}-{t[_i1]:.2f} ms')
-print(f'peak |eps+|            : {_amp*1e6:.1f} ustrain')
-print(f'residual |eps+ + eps-| : rms {null_rms:.2e}, max {null_max:.2e} '
-      '(relative to peak |eps+|)')
-print(f'threshold              : {NULL_TOL:.1e}   ->  '
-      f'{"PASS" if null_rms <= NULL_TOL else "FAIL"}')
-if null_rms > NULL_TOL:
-    print('  The free surface does not come out stress-free, so the transit\n'
-          '  times L_free/c0 are wrong. Most likely: a coupler that is not\n'
-          '  bar material, or the wrong coupler length. Note L_free_ref is\n'
-          '  NOT the suspect -- this test is blind to it.')
+if _i1 <= _i0:
+    null_rms = null_max = float('nan')
+    print('cannot be evaluated: once the clipped tail is excluded, the window '
+          'clear of\nboth the record start and the truncation collapses to '
+          'nothing at every gauge\nat once. This record does not reach the '
+          'free surface in clean form.')
+else:
+    null_rms = float(np.sqrt(np.mean(_total[_w] ** 2)) / _amp)
+    null_max = float(np.abs(_total[_w]).max() / _amp)
+    print(f'reconstructed at the free surface from all {len(names)} gauges, '
+          f'{t_null[_i0]:.2f}-{t_null[_i1-1]:.2f} ms'
+          + (f' (record truncated to {t_null[-1]:.2f} ms, clear of the '
+             'clipped tail)' if EXPERIMENT and _hi_null < N else ''))
+    print(f'peak |eps+|            : {_amp*SCALE:.1f} {USYM}')
+    print(f'residual |eps+ + eps-| : rms {null_rms:.2e}, max {null_max:.2e} '
+          '(relative to peak |eps+|)')
+    print(f'threshold              : {NULL_TOL:.1e}   ->  '
+          f'{"PASS" if null_rms <= NULL_TOL else "FAIL"}')
+    if null_rms > NULL_TOL:
+        print('  The free surface does not come out stress-free, so the '
+              'transit\n  times L_free/c0 are wrong. Most likely: a coupler '
+              'that is not\n  bar material, or the wrong coupler length. Note '
+              'L_free_ref is\n  NOT the suspect -- this test is blind to it.')
 
 # --------------------------------------------------------------------------
 # density: NOT identifiable from the records; closed with the bar's mass
 # --------------------------------------------------------------------------
 # One uniform assembly, checked above, so either bar's density will do.
-m_bar = d['rho_in'] * AREA * L_ASSEMBLY
-E_id = (m_bar / (AREA * L_ASSEMBLY)) * c0_id ** 2
-
 print('\n--- density and modulus '
       '---------------------------------------------------')
-print('NOT identifiable from strain records: they fix c0 = sqrt(E/rho) and no '
-      'more.\nClosed here with one extra measurement, the bar mass. In the lab '
-      'that is an\nindependent weighing; HERE it is computed back from the '
-      "simulator's own rho,\nso the rho line is circular. The E line is not: "
-      'it uses the IDENTIFIED c0.\n')
-print(f'bar mass (weighed)      : {m_bar*1e3:.1f} g')
-print(f'rho = m / (A L)         : {m_bar/(AREA*L_ASSEMBLY):.4e} kg/mm^3   '
-      f'(circular)')
-print(f'E   = rho c0^2          : {E_id:.3f} GPa   '
-      f'(true {d["E_in"]:.3f}, rel err {E_id/d["E_in"]-1:+.1e})')
-print(f'E*A (the force scale)   : {E_id*AREA:.1f} kN   '
-      f'(true {d["E_in"]*d["A_in"]:.1f})')
+_rho = d.get('rho_in')
+if _rho is None:
+    print('NOT computed: no bar density supplied for this record (rho is '
+          'optional in\n[.input_bar]/[.output_bar] and was omitted here). '
+          'The reconstruction never\nasks for it anyway -- E, A and rho enter '
+          'nowhere; only c0, the positions and\neta do.')
+else:
+    m_bar = _rho * AREA * L_ASSEMBLY
+    E_id = (m_bar / (AREA * L_ASSEMBLY)) * c0_id ** 2
+    print('NOT identifiable from strain records: they fix c0 = sqrt(E/rho) and '
+          'no more.\nClosed here with one extra measurement, the bar mass. In '
+          'the lab that is an\nindependent weighing; HERE it is computed back '
+          f"from {'the simulator' if not EXPERIMENT else 'an assumed handbook'}"
+          "'s own rho,\nso the rho line is circular. The E line is not: it "
+          'uses the IDENTIFIED c0.\n')
+    print(f'bar mass (weighed)      : {m_bar*1e3:.1f} g')
+    print(f'rho = m / (A L)         : {m_bar/(AREA*L_ASSEMBLY):.4e} kg/mm^3   '
+          f'({"assumed handbook value" if EXPERIMENT else "circular"})')
+    if EXPERIMENT:
+        print(f'E   = rho c0^2          : {E_id:.3f} GPa   (closure, not a '
+              'measurement -- rho above is assumed)')
+        print(f'E*A (the force scale)   : {E_id*AREA:.1f} kN')
+    else:
+        print(f'E   = rho c0^2          : {E_id:.3f} GPa   '
+              f'(true {d["E_in"]:.3f}, rel err {E_id/d["E_in"]-1:+.1e})')
+        print(f'E*A (the force scale)   : {E_id*AREA:.1f} kN   '
+              f'(true {d["E_in"]*d["A_in"]:.1f})')
 
 print('\n--- ready to use '
       '----------------------------------------------------------')
@@ -604,6 +756,33 @@ print(f'  gauges = [{", ".join(f"{p:.2f}" for p in id_pos[:n_in])}]'
       '    # input bar, mm from its face')
 print(f'  gauges = [{", ".join(f"{p:.2f}" for p in id_pos[n_in:])}]'
       '    # output bar')
+
+# --------------------------------------------------------------------------
+# hand the numbers on
+# --------------------------------------------------------------------------
+# The same split the simulators use: one script produces, another consumes,
+# and a file in between so that iterating on a reconstruction does not mean
+# re-running the identification. c_in/c_out and R_in/R_out duplicate the same
+# assembly-wide value per bar -- one c0, one Q, one identification -- matching
+# dump.npz's own convention for this rig's symmetric fields, which is what
+# lets a bar-indexed consumer read this without special-casing a shared-
+# assembly identification.
+IDENT_FILE = 'bar_identified.npz'
+BARS = tuple(b for b, cnt in (('in', n_in), ('out', len(names) - n_in))
+            if cnt >= 1)
+_out = dict(case=CASE, bars=np.array(BARS))
+for b, off, cnt in (('in', 0, n_in), ('out', n_in, len(names) - n_in)):
+    if cnt < 1:
+        continue
+    _out[f'c_{b}'] = c0_id
+    _out[f'R_{b}'] = Q_MEAN
+    _out[f'L_ref_{b}'] = L_FREE_REF
+    _out[f'x_{b}'] = id_pos[off:off + cnt]
+    _out[f'L_free_{b}'] = L_free[off:off + cnt]
+    if EXPERIMENT:
+        _out[f'tape_{b}'] = np.asarray(true_pos[off:off + cnt], float)
+np.savez(IDENT_FILE, **_out)
+print(f'\nwrote {IDENT_FILE}: c0={c0_id:.1f} for {", ".join(BARS)}')
 
 # --------------------------------------------------------------------------
 # figure
@@ -620,10 +799,13 @@ axes[1].sharex(axes[0])
 axes[3].sharex(axes[2])
 
 k = REF
-axes[0].plot(t, signals[k] * 1e6, color=BLUE, lw=.9)
-axes[0].set_ylabel('Strain (ustrain)')
-axes[0].set_title(f'Calibration shot at gauge {names[k]} — 1097 us pulse, so '
-                  'the echo overlaps the direct pulse', loc='left', fontsize=11)
+axes[0].plot(t, signals[k] * SCALE, color=BLUE, lw=.9)
+axes[0].set_ylabel(f'Signal ({USYM})')
+axes[0].set_title(
+    (f'Measured shot at gauge {names[k]} — {d["source"].rsplit("/", 1)[-1]}'
+     if EXPERIMENT else
+     f'Calibration shot at gauge {names[k]} — 1097 us pulse, so the echo '
+     'overlaps the direct pulse'), loc='left', fontsize=11)
 
 axes[1].plot(t, _xcorr(grads[k], TEMPLATE) / np.abs(_xcorr(grads[k], TEMPLATE)).max(),
              color=INK, lw=.9)
@@ -643,39 +825,51 @@ axes[1].set_xlim(0, min(t[-1], arrival[k] + 2.2 * P))
 # --- the free-end null, made visible ---------------------------------------
 # Two panels rather than one with two y-scales: the waves are ~1000 ustrain and
 # their sum is ~1, so a shared axis would render the sum as a flat line on zero
-# and prove nothing. Separate panels let each be read at its own scale.
-_sig = 1e6                                     # strain -> ustrain
-axes[2].plot(t, p_free * _sig, color=BLUE, lw=.9, label=r'$\varepsilon_+$ (incident)')
-axes[2].plot(t, m_free * _sig, color=ORANGE, lw=.9, label=r'$\varepsilon_-$ (reflected)')
-axes[2].set_ylabel('Strain (ustrain)')
+# and prove nothing. Separate panels let each be read at its own scale. Plotted
+# over t_null, which is the full record except for a measured shot with a
+# clipped tail, where it stops before the earliest clip onset -- see the
+# free-end null test above for why `separate` itself must not see that tail.
+axes[2].plot(t_null, p_free * SCALE, color=BLUE, lw=.9,
+            label=r'$\varepsilon_+$ (incident)')
+axes[2].plot(t_null, m_free * SCALE, color=ORANGE, lw=.9,
+            label=r'$\varepsilon_-$ (reflected)')
+axes[2].set_ylabel(f'Signal ({USYM})')
 axes[2].set_title('Waves reconstructed AT the free surface — a free end inverts, '
                   'so these should be mirror images', loc='left', fontsize=11)
 # upper LEFT: the record is quiescent before the first arrival, so the legend
 # cannot collide with a trace there. Upper right is where the waves peak.
 axes[2].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='upper left')
 
-_band = NULL_TOL * _amp * _sig
-axes[3].axhspan(-_band, _band, color=BLUE, alpha=.18,
-                label=f'pass threshold ±{NULL_TOL:.1e} × peak |ε₊|')
-axes[3].plot(t, _total * _sig, color=INK, lw=.9,
+_NULL_OK = _i1 > _i0
+_band = NULL_TOL * _amp * SCALE
+if _NULL_OK:
+    axes[3].axhspan(-_band, _band, color=BLUE, alpha=.18,
+                    label=f'pass threshold ±{NULL_TOL:.1e} × peak |ε₊|')
+axes[3].plot(t_null, _total * SCALE, color=INK, lw=.9,
              label=r'$\varepsilon_+ + \varepsilon_-$  (= stress / E)')
 axes[3].axhline(0, color=GRID, lw=.8)
-for _b in (t[_i0], t[_i1]):                    # the window the rms is taken over
-    axes[3].axvline(_b, color=ORANGE, lw=1.1, ls='--')
-# bottom, not top: the legend owns the top-left corner of this panel
-axes[3].annotate('analysis window', (t[_i0], 0.04), xytext=(4, 0),
-                 textcoords='offset points', fontsize=8, color=MUTED,
-                 xycoords=('data', 'axes fraction'), va='bottom')
-axes[3].set_xlabel('Time (ms)'); axes[3].set_ylabel('Strain (ustrain)')
-axes[3].set_title(f'Free-surface stress — rms {null_rms:.2e} of peak |ε₊|, '
-                  f'{"PASS" if null_rms <= NULL_TOL else "FAIL"}. Outside the '
-                  'window the record truncates', loc='left', fontsize=11)
+if _NULL_OK:
+    for _b in (t_null[_i0], t_null[_i1 - 1]):  # the window the rms is taken over
+        axes[3].axvline(_b, color=ORANGE, lw=1.1, ls='--')
+    # bottom, not top: the legend owns the top-left corner of this panel
+    axes[3].annotate('analysis window', (t_null[_i0], 0.04), xytext=(4, 0),
+                     textcoords='offset points', fontsize=8, color=MUTED,
+                     xycoords=('data', 'axes fraction'), va='bottom')
+axes[3].set_xlabel('Time (ms)'); axes[3].set_ylabel(f'Signal ({USYM})')
+axes[3].set_title(
+    (f'Free-surface stress — rms {null_rms:.2e} of peak |ε₊|, '
+     f'{"PASS" if null_rms <= NULL_TOL else "FAIL"}. Outside the window the '
+     'record truncates' if _NULL_OK else
+     'Free-surface stress — cannot be evaluated: no window clear of both the '
+     'record start and\nthe clipped tail exists at every gauge at once'),
+    loc='left', fontsize=11)
 axes[3].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='upper left')
 # Scale to the residual inside the window, not to the truncation spike outside
-# it, which is ~200x larger and would flatten everything worth seeing.
-_r = np.abs(_total[_w]).max() * _sig
+# it, which is ~200x larger and would flatten everything worth seeing. With no
+# window at all, fall back to the whole (clip-free) record instead.
+_r = np.abs(_total[_w]).max() * SCALE if _NULL_OK else np.abs(_total).max() * SCALE
 axes[3].set_ylim(-3 * _r, 3 * _r)
-axes[2].set_xlim(0, t[-1]); axes[3].set_xlim(0, t[-1])
+axes[2].set_xlim(0, t_null[-1]); axes[3].set_xlim(0, t_null[-1])
 
 for ax in axes:
     ax.set_facecolor('#fcfcfb'); ax.grid(True, color=GRID, lw=.7, alpha=.8)
@@ -687,7 +881,9 @@ for ax in axes:
     ax.title.set_color(INK)
 
 fig.tight_layout()
-fig.savefig('bar_identification_tension.png', dpi=140, facecolor=fig.get_facecolor())
-print('\nwrote bar_identification_tension.png')
+FIG = f'bar_identification_{CASE}.png' if EXPERIMENT \
+    else 'bar_identification_tension.png'
+fig.savefig(FIG, dpi=140, facecolor=fig.get_facecolor())
+print(f'\nwrote {FIG}')
 
 plotting.show_unless(HEADLESS)

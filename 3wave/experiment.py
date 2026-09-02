@@ -46,12 +46,25 @@ Three things, and all three break something if left alone:
     measured length the operator supplies, not because it is truth.
 
 --------------------------------------------------------------------------
-One instrumented bar
+One instrumented bar, or two
 --------------------------------------------------------------------------
-An uninstrumented bar is reported as `eps_in` with shape (0, N) and an empty
-`pos_in`, rather than by omitting the keys. Downstream then asks how many
-gauges a bar has, which is the question it actually wants answered, instead of
-whether a key exists.
+Config carries one of two bar-table shapes: a single [.bar] table (one
+instrumented bar -- experiment_pc_bar has no gauge on its aluminium input bar
+at all), or [.input_bar]/[.output_bar] (both bars instrumented, joined
+through [.specimen].length -- e.g. a real SHTB calibration shot, bolted
+through a coupler with no specimen). An uninstrumented bar is reported as
+`eps_in` with shape (0, N) and an empty `pos_in`, rather than by omitting the
+keys, either way. Downstream then asks how many gauges a bar has, which is the
+question it actually wants answered, instead of whether a key exists.
+
+--------------------------------------------------------------------------
+Clipping
+--------------------------------------------------------------------------
+Amplifier saturation is not modelled -- it is only DETECTED and reported, per
+channel, as `clip_onset` (NaN where a channel never clips). `separate` and
+every edge-timing search still assume every sample is real signal; a script
+using a record with clipping must window itself clear of it. See
+identify_bar_tension.py's EXPERIMENT-only masking for the pattern.
 """
 
 import os
@@ -86,12 +99,21 @@ def load_experiment(case, path=None):
             t0_file               where that zero sits in the FILE's own time
                                   base [us], so results can be referred back
             eps_out, pos_out      (n_gauge, N) signals and their TAPE positions
-            eps_in, pos_in        empty -- the input bar carries no gauge
-            units                 'kN'; these are forces, not strains
-            L_free_out, L_bar_out the supplied bar length [mm]
-            L_free_in             the input bar's length, for its c = 2L/P only
+            eps_in, pos_in        empty for a single-[.bar] case; populated the
+                                  same way for a two-bar case
+            units                 'kN' by default, or config's "units" (e.g.
+                                  "N") -- these are forces, not strains
+            L_free_out, L_bar_out the supplied bar length(s) [mm]
+            L_free_in             single-bar case: the input bar's length, for
+                                  its c = 2L/P only. Two-bar case: the real
+                                  input bar length, same status as L_free_out
             A_out, rho_out        geometry and an assumed density, for closures
-            L_specimen            0.0 -- the bars are struck face to face
+                                  (A_in, rho_in too, for a two-bar case)
+            L_specimen            0.0 (bars struck face to face) or the
+                                  coupler's [.specimen].length for a two-bar
+                                  case bolted through a joint
+            clip_onset            per-channel amplifier-rail onset time [ms],
+                                  in eps_in-then-eps_out order; NaN = no clip
             loading, eta          as for a simulated dump
             case, cfg, source     provenance: which case, its config, which file
 
@@ -140,26 +162,90 @@ def load_experiment(case, path=None):
     # it, and without this every time printed downstream is offset from the
     # record the operator is looking at -- by 1638 us on the specimen shot.
     t0_file = float(t_us_full[len(t_us_full) - n])
-    bar = cfg['bar']
-    L = float(bar['length'])
+    # An amplifier rail is not signal. NaN per channel here means "never
+    # clips" and costs nothing downstream; a real onset lets a search window
+    # stop before the rail rather than mistake the transition into it for an
+    # edge -- see identify_bar_tension.py's EXPERIMENT-only masking.
+    clip_onset = _clip_onset(sig, t_us) / US_PER_MS
+    units = str(cfg.get('units', 'kN'))
+
+    if 'bar' in cfg:
+        bar = cfg['bar']
+        L = float(bar['length'])
+        d = dict(
+            t=np.arange(n) * dt, dt=dt, N=n,
+            eps_out=sig, pos_out=np.asarray(cfg['gauges'], float),
+            eps_in=np.zeros((0, n)), pos_in=np.zeros(0),
+            units=units,
+            L_free_out=L, L_bar_out=L,
+            L_free_in=float(cfg.get('L_free_in_ref', 0.0)) or None,
+            A_out=0.25 * np.pi * float(bar['diameter']) ** 2,
+            rho_out=float(bar.get('rho', 0.0)) or None,
+            L_specimen=0.0,
+            loading=str(cfg['loading']),
+            eta=float(cfg['analysis']['eta']),
+            case=case, cfg=cfg, source=src, t0_file=t0_file,
+            clip_onset=clip_onset,
+        )
+        if d['eps_out'].shape[0] != len(d['pos_out']):
+            raise ValueError(f'{case}: {d["eps_out"].shape[0]} channels but '
+                             f'{len(d["pos_out"])} tape positions')
+        return d
+
+    # Two instrumented bars, joined through a coupler/specimen of known length
+    # (0 for bars butted directly together). Gauge columns are split by their
+    # "in-"/"out-" name prefix -- config._validate_experiment already checked
+    # every gauge column carries one of those two prefixes.
+    in_bar, out_bar = cfg['input_bar'], cfg['output_bar']
+    gauges = np.asarray(cfg['gauges'], float)
+    is_in = np.array([nm.startswith('in-') for nm in names])
+    is_out = np.array([nm.startswith('out-') for nm in names])
     d = dict(
         t=np.arange(n) * dt, dt=dt, N=n,
-        eps_out=sig, pos_out=np.asarray(cfg['gauges'], float),
-        eps_in=np.zeros((0, n)), pos_in=np.zeros(0),
-        units='kN',
-        L_free_out=L, L_bar_out=L,
-        L_free_in=float(cfg.get('L_free_in_ref', 0.0)) or None,
-        A_out=0.25 * np.pi * float(bar['diameter']) ** 2,
-        rho_out=float(bar.get('rho', 0.0)) or None,
-        L_specimen=0.0,
+        eps_in=sig[is_in], pos_in=gauges[is_in],
+        eps_out=sig[is_out], pos_out=gauges[is_out],
+        units=units,
+        L_free_in=float(in_bar['L_input']), L_bar_in=float(in_bar['L_input']),
+        L_free_out=float(out_bar['L_output']), L_bar_out=float(out_bar['L_output']),
+        A_in=0.25 * np.pi * float(in_bar['diameter']) ** 2,
+        A_out=0.25 * np.pi * float(out_bar['diameter']) ** 2,
+        rho_in=float(in_bar.get('rho', 0.0)) or None,
+        rho_out=float(out_bar.get('rho', 0.0)) or None,
+        L_specimen=float(cfg['specimen']['length']),
         loading=str(cfg['loading']),
         eta=float(cfg['analysis']['eta']),
         case=case, cfg=cfg, source=src, t0_file=t0_file,
+        # in-then-out, matching eps_in/eps_out's own concatenation order --
+        # NOT necessarily the raw column order, if config lists out-* first.
+        clip_onset=np.concatenate([clip_onset[is_in], clip_onset[is_out]]),
     )
+    if d['eps_in'].shape[0] != len(d['pos_in']):
+        raise ValueError(f'{case}: {d["eps_in"].shape[0]} input-bar channels '
+                         f'but {len(d["pos_in"])} tape positions')
     if d['eps_out'].shape[0] != len(d['pos_out']):
-        raise ValueError(f'{case}: {d["eps_out"].shape[0]} channels but '
-                         f'{len(d["pos_out"])} tape positions')
+        raise ValueError(f'{case}: {d["eps_out"].shape[0]} output-bar '
+                         f'channels but {len(d["pos_out"])} tape positions')
     return d
+
+
+def _clip_onset(sig, t_us, min_run=20):
+    """
+    First time [same units as t_us] of the run of EXACTLY constant value that
+    persists to each channel's last sample -- an amplifier rail, not a real
+    plateau. NaN for a channel that never clips.
+
+    An amplifier rail repeats one float exactly, so no tolerance is needed:
+    the run is found by looking backward from the last sample for the first
+    value that differs from it. `min_run` guards against a channel that
+    merely happens to end on a few flat samples of real signal.
+    """
+    onset = np.full(sig.shape[0], np.nan)
+    for k, row in enumerate(sig):
+        diff = np.nonzero(row[:-1] != row[-1])[0]
+        i0 = int(diff[-1]) + 1 if len(diff) else 0
+        if len(row) - i0 >= min_run:
+            onset[k] = t_us[i0]
+    return onset
 
 
 def _debias(sig, t_us, before=0.0):

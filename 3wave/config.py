@@ -35,7 +35,8 @@ __all__ = ['load', 'bar_lengths', 'CASES', 'EXPERIMENT_CASES', 'BAR_TABLES',
 # simulator's tables -- no mesh, no striker, no material to integrate, because
 # the bar already did the integrating. _validate skips those checks for them
 # and keeps the ones that still mean something.
-EXPERIMENT_CASES = ('experiment_pc_bar', 'experiment_pc_specimen')
+EXPERIMENT_CASES = ('experiment_pc_bar', 'experiment_pc_specimen',
+                    'experiment_tension_bar', 'experiment_tension_bar_2')
 
 CASES = ('compression', 'calibration_compression',
          'tension', 'calibration_tension') + EXPERIMENT_CASES
@@ -164,9 +165,17 @@ def _validate_experiment(cfg, where):
     """
     The subset of _validate that still means something for a measured shot.
 
-    Gone: the bar/specimen/striker tables, the mesh and the timestep -- there is
-    nothing to integrate. Kept: the sign convention, eta, and the gauge list,
-    because those reach `separate` exactly as they do for a simulated case.
+    Gone: the mesh and the timestep -- there is nothing to integrate. Kept: the
+    sign convention, eta, and the gauge list, because those reach `separate`
+    exactly as they do for a simulated case.
+
+    Two bar-table shapes are accepted, and exactly one must be present:
+
+    - a single [.bar] table -- one instrumented bar (experiment_pc_bar has no
+      gauge on its aluminium input bar at all, so this is the common case);
+    - [.input_bar]/[.output_bar] -- both bars instrumented, joined through
+      [.specimen].length (0 for bars butted directly together). Gauge columns
+      must then be named "in-*"/"out-*" so they can be split by bar.
 
     NOTE the gauge list here is TAPE, not truth. identify_bar_compression.py is
     never told it; reconstruct_interface.py uses it as one of the two position
@@ -177,7 +186,7 @@ def _validate_experiment(cfg, where):
         raise ValueError(f'{where}: eta must be > 0 (separate() is singular '
                          'at DC for eta = 0)')
 
-    for key in ('file', 'columns', 'bar'):
+    for key in ('file', 'columns'):
         if key not in cfg:
             raise KeyError(f'{where}: missing "{key}"')
 
@@ -190,13 +199,6 @@ def _validate_experiment(cfg, where):
     if len(set(cols.values())) != len(cols):
         raise ValueError(f'{where}: two channels share a column index: {cols}')
 
-    bar = cfg['bar']
-    for key in ('length', 'diameter'):
-        if key not in bar:
-            raise KeyError(f'{where}: missing [.bar].{key}')
-        if bar[key] <= 0:
-            raise ValueError(f'{where}: [.bar].{key} must be > 0')
-
     gauges = cfg.get('gauges')
     if not gauges:
         raise KeyError(f'{where}: missing or empty "gauges" (tape positions)')
@@ -205,8 +207,63 @@ def _validate_experiment(cfg, where):
                          f'{len(gauge_cols)} gauge channels in [.columns]')
     if any(g <= 0 for g in gauges):
         raise ValueError(f'{where}: gauge distances must be > 0; got {gauges}')
-    if len(set(gauges)) != len(gauges):
-        raise ValueError(f'{where}: gauge distances must be distinct; got {gauges}')
-    if max(gauges) >= bar['length']:
-        raise ValueError(f'{where}: gauge at {max(gauges)} mm does not fit on a '
-                         f'{bar["length"]} mm bar')
+
+    two_bar = all(table in cfg for table, _ in BAR_TABLES)
+    if two_bar and 'bar' in cfg:
+        raise KeyError(f'{where}: has both "[.bar]" and [.input_bar]/'
+                       '[.output_bar] -- use one shape or the other')
+    if not two_bar and 'bar' not in cfg:
+        raise KeyError(f'{where}: missing "[.bar]" (one instrumented bar) or '
+                       '[.input_bar]/[.output_bar] (both bars instrumented)')
+
+    if not two_bar:
+        bar = cfg['bar']
+        for key in ('length', 'diameter'):
+            if key not in bar:
+                raise KeyError(f'{where}: missing [.bar].{key}')
+            if bar[key] <= 0:
+                raise ValueError(f'{where}: [.bar].{key} must be > 0')
+        if len(set(gauges)) != len(gauges):
+            raise ValueError(f'{where}: gauge distances must be distinct; '
+                             f'got {gauges}')
+        if max(gauges) >= bar['length']:
+            raise ValueError(f'{where}: gauge at {max(gauges)} mm does not '
+                             f'fit on a {bar["length"]} mm bar')
+        return
+
+    # Two instrumented bars: gauge columns say which bar they're on, and
+    # distinctness / fits-on-the-bar are scoped per bar -- the two bars
+    # legitimately share a tape distance (e.g. in-1 = out-0 = 120 mm from the
+    # interface), which a global uniqueness check would wrongly reject.
+    for name in gauge_cols:
+        if not (name.startswith('in-') or name.startswith('out-')):
+            raise ValueError(f'{where}: [.columns] gauge {name!r} must be '
+                             'named "in-*" or "out-*" to say which bar it is on')
+
+    if 'specimen' not in cfg or 'length' not in cfg['specimen']:
+        raise KeyError(f'{where}: missing [.specimen].length (the joint/'
+                       'coupler between the two bars, 0 if butted directly '
+                       'together)')
+    if cfg['specimen']['length'] < 0:
+        raise ValueError(f'{where}: [.specimen].length must be >= 0')
+
+    for table, lkey in BAR_TABLES:
+        bar = cfg[table]
+        for key in (lkey, 'diameter'):
+            if key not in bar:
+                raise KeyError(f'{where}: missing [.{table}].{key}')
+            if bar[key] <= 0:
+                raise ValueError(f'{where}: [.{table}].{key} must be > 0')
+
+    for prefix, (table, lkey) in zip(('in-', 'out-'), BAR_TABLES):
+        idx = [i for i, n in enumerate(gauge_cols) if n.startswith(prefix)]
+        sub = [gauges[i] for i in idx]
+        if not sub:
+            continue
+        if len(set(sub)) != len(sub):
+            raise ValueError(f'{where}: {prefix}* gauge distances must be '
+                             f'distinct; got {sub}')
+        length = cfg[table][lkey]
+        if max(sub) >= length:
+            raise ValueError(f'{where}: a {prefix}* gauge at {max(sub)} mm '
+                             f'does not fit on the {length} mm bar')

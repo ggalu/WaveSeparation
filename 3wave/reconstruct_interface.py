@@ -120,6 +120,13 @@ x_tape = (np.asarray(ID[f'tape_{BAR}'], float) if f'tape_{BAR}' in ID.files
 IMPACT = str(cfg.get('interface', 'impact')) == 'impact'
 IFACE = ('impact interface' if IMPACT else
          f'{BAR}put-bar / specimen interface')
+# The UNILATERAL check (F >= 0) assumes a dry contact that cannot pull -- true
+# of a direct-impact bar or a compression specimen pressed between two bars,
+# false of a bonded tension joint, which legitimately carries either sign.
+# This is a property of the loading convention, not of IMPACT/interface: even
+# a bonded COMPRESSION specimen still cannot pull (see the comment in
+# checks()), so TENSION is what gates it, not whether a specimen is present.
+TENSION = str(d.get('loading', cfg.get('loading'))) == 'tension'
 
 # The identified numbers belong to a BAR. Reconstructing a different shot with
 # them is the whole point of calibrating -- but it is only valid on the SAME
@@ -266,7 +273,8 @@ def checks(p, m, F):
         causality_ok=(i_pre > i_on + 2), rise_ok=rise_ok,
         rise_p=rise_p,
         causality=causality,
-        tensile=float(max(0.0, -F[i_on:i_ten].min()) / amp),
+        tensile=(float('nan') if TENSION else
+                 float(max(0.0, -F[i_on:i_ten].min()) / amp)),
         after=(float(np.sqrt(np.mean(F[i_sep:i_end] ** 2)) / amp)
                if IMPACT and i_end > i_sep else float('nan')),
         peak=float(F.max()),
@@ -306,8 +314,9 @@ for name, x in SETS:
     r = RES[name]
     Dg = abs(x[1] - x[0]) if len(x) > 1 else float('nan')
     _cau = f'{r["causality"]:11.3f}' if r['causality_ok'] else f'{"n/a":>11}'
+    _ten = f'{"n/a":>9}' if TENSION else f'{r["tensile"]:9.3f}'
     print(f'{name:>11} {Dg:8.2f} {r["peak"]:9.3f} {r["null"]:10.2e} '
-          + _cau + f' {r["tensile"]:9.3f}'
+          + _cau + ' ' + _ten
           + (f'{r["after"]:11.3f}' if IMPACT else ''))
 print('the right-hand columns are fractions of peak |P|. Zero is the '
       'ideal;\nwhat is left is model error, and its SIGN is known -- a contact '
@@ -437,9 +446,12 @@ if IMPACT:
                      fontsize=9, color=MUTED)
 axes[2].set_xlabel('Time (us)')
 axes[2].set_ylabel(f'Interface force ({UNITS})')
-axes[2].set_title(f'THE ANSWER — force at the {IFACE}. It cannot go '
-                  'negative (a dry contact does not pull): residual '
-                  f'{r["tensile"]:.3f} of peak'
+axes[2].set_title(f'THE ANSWER — force at the {IFACE}.'
+                  + (' A bonded joint may carry either sign; the unilateral '
+                     'check does not apply'
+                     if TENSION else
+                     ' It cannot go negative (a dry contact does not pull): '
+                     f'residual {r["tensile"]:.3f} of peak')
                   + ('' if ATT is not None else '  (LOSSLESS)'),
                   loc='left', fontsize=10)
 axes[2].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
