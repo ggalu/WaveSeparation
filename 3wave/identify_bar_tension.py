@@ -879,7 +879,6 @@ for col, (bar, off, cnt) in enumerate(COLS):
     ax0.set_ylabel(f'Signal ({USYM})')
     ax0.set_title(f'What was measured — {cnt} gauges on the {bar} bar',
                   loc='left', fontsize=11)
-    ax0.legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
 
     ax1 = axes[1, col]
     for j in range(cnt):
@@ -890,7 +889,30 @@ for col, (bar, off, cnt) in enumerate(COLS):
     ax1.set_title(f'Differentiated record at both {bar}-bar gauges — what the '
                   'edge timing above is actually measured on', loc='left',
                   fontsize=10)
-    ax1.legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='upper left')
+
+    # Vertical markers, on BOTH the raw and differentiated rows: the end of
+    # the striker pulse (arrival + P) and the free-end echo (arrival + tau),
+    # per gauge -- not per bar, since the two gauges on a bar see both edges
+    # at different times. Colour matches the gauge; linestyle matches the
+    # edge, so one small proxy legend below explains both rows at once.
+    for j in range(cnt):
+        k = off + j
+        gcol = (BLUE, ORANGE)[j % 2]
+        for ax in (ax0, ax1):
+            if not np.isnan(P):
+                ax.axvline(arrival[k] + P, color=gcol, lw=1.1, ls='--',
+                          alpha=.7)
+            if not np.isnan(tau[k]):
+                ax.axvline(arrival[k] + tau[k], color=gcol, lw=1.1, ls=':',
+                          alpha=.7)
+    _marks = [plt.Line2D([], [], color=MUTED, lw=1.1, ls='--',
+                         label='striker pulse ends'),
+              plt.Line2D([], [], color=MUTED, lw=1.1, ls=':',
+                         label='free-end echo')]
+    for ax, loc in ((ax0, 'lower left'), (ax1, 'upper left')):
+        h, l = ax.get_legend_handles_labels()
+        ax.legend(h + _marks, l + [m.get_label() for m in _marks],
+                 frameon=False, fontsize=9, labelcolor=MUTED, loc=loc)
 
     # F = P + M at x = 0, from this bar's own two gauges only -- exactly
     # `reconstruct_interface.py`'s per-bar panel, reusing whatever alpha(f)/
