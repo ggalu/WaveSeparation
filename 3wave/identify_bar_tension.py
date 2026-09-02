@@ -682,6 +682,21 @@ if EXPERIMENT and 'attenuation' in cfg:
                   f'{a["misfit"]:.2e}, alpha+dispersion '
                   f'{a["misfit_dispersion"]:.2e}')
 
+    # A bar whose only gauge pair runs opposite to propagation (see the
+    # direction note above -- the in bar on this rig) cannot have c_p(f)
+    # MEASURED, only borrowed. This script already assumes ONE uniform bar
+    # end to end -- the check just above the [.input_bar]/[.output_bar]
+    # tables refuses to run at all if their diameters disagree -- so the
+    # bar this borrows from is not a guess, it is the same rod stock. c_p(f)
+    # is a property of the CYLINDER (Pochhammer-Chree), not of which half of
+    # it a gauge happens to sit on.
+    for bar, other in (('in', 'out'), ('out', 'in')):
+        if (bar in ATT and ATT[bar]['dispersion_table'] is None
+                and other in ATT and ATT[other]['dispersion_table'] is not None):
+            ATT[bar]['dispersion_table'] = ATT[other]['dispersion_table']
+            print(f'{bar:>5} c_p/c0: borrowed from the {other} bar -- same rod '
+                  'stock and diameter, own pair runs opposite to propagation')
+
 # --------------------------------------------------------------------------
 # free-end null test -- the only check here that needs no ground truth
 # --------------------------------------------------------------------------
