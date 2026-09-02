@@ -73,6 +73,11 @@ _ap.add_argument('--bar', default=None,
 _ap.add_argument('--no-attenuation', action='store_true',
                  help='ignore the identified alpha(f) and reconstruct with a '
                       'lossless bar, for comparison.')
+_ap.add_argument('--no-dispersion', action='store_true',
+                 help='ignore the identified c_p(f)/c0 and reconstruct with '
+                      'c_p = c0 at every frequency, for comparison. '
+                      'Independent of --no-attenuation: dispersion is an '
+                      'elastic effect (Pochhammer-Chree), not a lossy one.')
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
 import config
@@ -144,6 +149,11 @@ if f'alpha_{BAR}' in ID.files and not ARGS.no_attenuation:
     ATT = (np.asarray(ID[f'alpha_f_{BAR}'], float),
            np.asarray(ID[f'alpha_{BAR}'], float))
 
+DISP = None
+if f'dispersion_{BAR}' in ID.files and not ARGS.no_dispersion:
+    DISP = (np.asarray(ID[f'dispersion_f_{BAR}'], float),
+            np.asarray(ID[f'dispersion_{BAR}'], float))
+
 # --------------------------------------------------------------------------
 # the OTHER bar, when the identification covered both -- its own waves and
 # the force equilibrium across the shared interface, nothing more. It is
@@ -163,6 +173,10 @@ if OTHER is not None:
     if f'alpha_{OTHER}' in ID.files and not ARGS.no_attenuation:
         ATT_o = (np.asarray(ID[f'alpha_f_{OTHER}'], float),
                 np.asarray(ID[f'alpha_{OTHER}'], float))
+    DISP_o = None
+    if f'dispersion_{OTHER}' in ID.files and not ARGS.no_dispersion:
+        DISP_o = (np.asarray(ID[f'dispersion_f_{OTHER}'], float),
+                 np.asarray(ID[f'dispersion_{OTHER}'], float))
 
 print(__doc__.split('---')[0].strip())
 print(f'\nrecord     : {d.get("source", "dump.npz")}')
@@ -178,20 +192,25 @@ print(f'attenuation: ' + ('lossless (--no-attenuation)' if ARGS.no_attenuation
                           else 'none identified' if ATT is None else
                           f'alpha(f) up to {ATT[0][-1]:.0f} kHz, '
                           f'{ATT[1][-1]:.2e} /mm there'))
+print(f'dispersion : ' + ('c_p = c0 (--no-dispersion)' if ARGS.no_dispersion
+                          else 'none identified' if DISP is None else
+                          f'c_p/c0(f) up to {DISP[0][-1]:.0f} kHz, '
+                          f'{DISP[1][-1]:.4f} there'))
 
 
 # --------------------------------------------------------------------------
 # the reconstruction, and the checks on it
 # --------------------------------------------------------------------------
-def reconstruct(x, gsig=sig, gc0=c0, gatt=ATT):
+def reconstruct(x, gsig=sig, gc0=c0, gatt=ATT, gdisp=DISP):
     """P, M and F = P + M at the contact plane, for one set of gauge positions.
 
-    gsig/gc0/gatt default to the primary BAR's own signals/c0/attenuation, so
-    every existing call site is unaffected; the OTHER bar's reconstruction
-    below passes its own instead, reusing this rather than repeating the
-    separate() call.
+    gsig/gc0/gatt/gdisp default to the primary BAR's own signals/c0/attenuation/
+    dispersion, so every existing call site is unaffected; the OTHER bar's
+    reconstruction below passes its own instead, reusing this rather than
+    repeating the separate() call.
     """
-    p, m = separate(t, gsig, x, c0=gc0, eta=eta, attenuation=gatt)
+    p, m = separate(t, gsig, x, c0=gc0, eta=eta, dispersion=gdisp,
+                    attenuation=gatt)
     return p, m, p + m
 
 
@@ -312,7 +331,7 @@ def checks(p, m, F):
 def free_end(x):
     """The free-end null, from the same positions: L - x are distances from it."""
     p, m = separate(t, sig, L - np.asarray(x, float), c0=c0, eta=eta,
-                    attenuation=ATT)
+                    dispersion=DISP, attenuation=ATT)
     tot, amp = p + m, float(np.abs(p).max())
     w = slice(int(np.argmax(np.abs(p) > 0.02 * amp)),
               int(float(cfg.get('null', {}).get('window', 0.75)) * N))
@@ -335,7 +354,8 @@ for name, x in SETS:
 # `equilibrium` field, reused directly rather than through the rest of that
 # function's velocity/strain machinery, which assumes a deforming specimen.
 if OTHER is not None:
-    p_o, m_o, F_o = reconstruct(x_o, gsig=sig_o, gc0=c0_o, gatt=ATT_o)
+    p_o, m_o, F_o = reconstruct(x_o, gsig=sig_o, gc0=c0_o, gatt=ATT_o,
+                                gdisp=DISP_o)
     _r0 = RES[SETS[0][0]]
     _peak_eq = float(np.abs(_r0['F']).max())
     equilibrium = np.abs(_r0['F'] - F_o) / (_peak_eq if _peak_eq > 0 else 1.0)
@@ -441,90 +461,181 @@ else:
 import matplotlib.pyplot as plt   # backend already chosen by plotting.init
 
 BLUE, ORANGE, INK, MUTED, GRID = '#2a78d6', '#eb6834', '#0b0b0b', '#52514e', '#d8d7d3'
+EQ_COL = '#8a7a3d'
 SURFACE = '#fcfcfb'
 tt = t * 1e3
 T0_FIG = float(d.get('t0_file', 0.0))
 tt_f = tt + T0_FIG
 
-# Two extra panels -- the other bar's own waves, and the equilibrium residual
-# -- only when the identification covered both bars. I_ANS is "THE ANSWER"
-# panel's index either way, so everything below it needn't know which shape
-# this run is.
-N_ROWS = 5 if OTHER is not None else 3
-I_ANS = 3 if OTHER is not None else 2
-fig, axes = plt.subplots(N_ROWS, 1, figsize=(11, 4 * N_ROWS), sharex=True)
-fig.patch.set_facecolor(SURFACE)
-
-# --- what went in ---------------------------------------------------------
-for k, s in enumerate(sig):
-    axes[0].plot(tt_f, s * SCALE, lw=.9,
-                 color=(BLUE, ORANGE, INK)[k % 3],
-                 label=f'gauge {k} at {x_id[k]:.0f} mm (identified)')
-axes[0].set_ylabel(f'Gauge signal ({USYM})')
-axes[0].set_title(f'What was measured — {len(sig)} gauges on the {BAR} bar',
-                  loc='left', fontsize=11)
-_g = max(np.abs(s_).max() for s_ in sig) * SCALE
-axes[0].set_ylim(-1.3 * _g, 1.35 * _g)
-axes[0].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
-
-# --- the two waves at the contact ----------------------------------------
-r = RES[SETS[0][0]]
-axes[1].plot(tt_f, r['p'] * SCALE, color=BLUE, lw=.9,
-             label=r'$P$  (leaving the contact, into the bar)')
-axes[1].plot(tt_f, r['m'] * SCALE, color=ORANGE, lw=.9,
-             label=r'$M$  (returning to the contact)')
-axes[1].axvline(r['t_echo'] + T0_FIG, color=MUTED, lw=1.1, ls='--')
-axes[1].annotate('  free-end echo arrives, $2L/c$ after the wave left',
-                 (r['t_echo'] + T0_FIG, 0), fontsize=9, color=MUTED, va='bottom')
-for _b in (r['t_echo'] + T0_FIG - r['rise'] * 1e3,
-           r['t_echo'] + T0_FIG + r['rise'] * 1e3):
-    axes[1].axvline(_b, color=GRID, lw=1.0, ls=':')
-axes[1].axhline(0, color=GRID, lw=.8)
-axes[1].set_ylabel(f'Wave ({USYM})')
-axes[1].set_title('The two waves separated AT the contact plane — $M$ is flat '
-                  'zero until the echo can get back: causality residual '
-                  f'{r["causality"]:.3f} of peak $|P|$'
-                  + ('' if ATT is not None else '  (LOSSLESS)'),
-                  loc='left', fontsize=10)
-# headroom, so the legend sits above the traces rather than across them
-_pk = max(np.abs(r['p']).max(), np.abs(r['m']).max()) * SCALE
-axes[1].set_ylim(-1.25 * _pk, 1.55 * _pk)
-axes[1].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='upper left')
-
-# --- the OTHER bar's own waves, at ITS face -------------------------------
 if OTHER is not None:
-    axes[2].plot(tt_f, p_o * SCALE, color=BLUE, lw=.9,
-                 label=r'$P$  (leaving the contact, into the bar)')
-    axes[2].plot(tt_f, m_o * SCALE, color=ORANGE, lw=.9,
-                 label=r'$M$  (returning to the contact)')
-    axes[2].axhline(0, color=GRID, lw=.8)
-    axes[2].set_ylabel(f'Wave ({USYM})')
-    axes[2].set_title(f'The two waves separated at the {OTHER} bar\'s own face'
-                      + ('' if ATT_o is not None else '  (LOSSLESS)'),
+    # One column per bar -- in, out -- three rows each: what was measured,
+    # the two waves separated AT THAT BAR'S OWN face, and F = P+M there. Only
+    # BAR (the one `checks()`/`free_end()` ran on) has the echo/causality/
+    # tensile/bars-part diagnostics computed at all, so those annotations sit
+    # on BAR's column only, whichever physical bar that happens to be; the
+    # equilibrium residual is a property of the shared interface and always
+    # goes with BAR's F panel, since `equilibrium` above is normalised by
+    # BAR's own peak.
+    PANEL = {
+        BAR: dict(sig=sig, x=x_id, p=r['p'], m=r['m'], att=ATT, primary=True),
+        OTHER: dict(sig=sig_o, x=x_o, p=p_o, m=m_o, att=ATT_o, primary=False),
+    }
+    COLS = [b for b in ('in', 'out') if b in PANEL]
+    fig, axes = plt.subplots(3, 2, figsize=(19, 12), sharex=True)
+    fig.patch.set_facecolor(SURFACE)
+
+    for col, bname in enumerate(COLS):
+        pnl = PANEL[bname]
+
+        # --- what went in --------------------------------------------------
+        ax0 = axes[0, col]
+        for k, s in enumerate(pnl['sig']):
+            ax0.plot(tt_f, s * SCALE, lw=.9, color=(BLUE, ORANGE, INK)[k % 3],
+                     label=f'gauge {k} at {pnl["x"][k]:.0f} mm (identified)')
+        ax0.set_ylabel(f'Gauge signal ({USYM})')
+        ax0.set_title(f'What was measured — {len(pnl["sig"])} gauges on the '
+                      f'{bname} bar', loc='left', fontsize=11)
+        _g = max(np.abs(s_).max() for s_ in pnl['sig']) * SCALE
+        ax0.set_ylim(-1.3 * _g, 1.35 * _g)
+        ax0.legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
+
+        # --- the two waves at that bar's own face ---------------------------
+        ax1 = axes[1, col]
+        ax1.plot(tt_f, pnl['p'] * SCALE, color=BLUE, lw=.9,
+                 label=r'$P$  (leaving the interface, into the bar)')
+        ax1.plot(tt_f, pnl['m'] * SCALE, color=ORANGE, lw=.9,
+                 label=r'$M$  (returning to the interface)')
+        causal_note = ''
+        if pnl['primary']:
+            ax1.axvline(r['t_echo'] + T0_FIG, color=MUTED, lw=1.1, ls='--')
+            ax1.annotate('  free-end echo arrives, $2L/c$ after the wave left',
+                         (r['t_echo'] + T0_FIG, 0), fontsize=9, color=MUTED,
+                         va='bottom')
+            for _b in (r['t_echo'] + T0_FIG - r['rise'] * 1e3,
+                       r['t_echo'] + T0_FIG + r['rise'] * 1e3):
+                ax1.axvline(_b, color=GRID, lw=1.0, ls=':')
+            if r['causality_ok']:
+                causal_note = (f' — causality residual {r["causality"]:.3f} '
+                               'of peak $|P|$')
+        ax1.axhline(0, color=GRID, lw=.8)
+        ax1.set_ylabel(f'Wave ({USYM})')
+        ax1.set_title(f'The two waves at the {bname}put-bar/specimen '
+                      f'interface{causal_note}'
+                      + ('' if pnl['att'] is not None else '  (LOSSLESS)'),
                       loc='left', fontsize=10)
-    _pk_o = max(np.abs(p_o).max(), np.abs(m_o).max()) * SCALE
-    axes[2].set_ylim(-1.25 * _pk_o, 1.55 * _pk_o)
-    axes[2].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='upper left')
+        _pk = max(np.abs(pnl['p']).max(), np.abs(pnl['m']).max()) * SCALE
+        ax1.set_ylim(-1.25 * _pk, 1.55 * _pk)
+        ax1.legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='upper left')
 
-# --- the answer -----------------------------------------------------------
-for (name, _), col, ls in zip(SETS, (INK, BLUE), ('-', '--')):
-    axes[I_ANS].plot(tt_f, RES[name]['F'] * SCALE, color=col, lw=1.0, ls=ls,
-                     label=f'$F = P + M$, {name} positions')
-if OTHER is not None:
-    axes[I_ANS].plot(tt_f, F_o * SCALE, color=ORANGE, lw=1.0, ls=':',
-                     label=f'$F = P + M$, {OTHER} bar (own gauges)')
-axes[I_ANS].axhline(0, color=GRID, lw=1.0)
-band = 0.03 * r['amp'] * SCALE
-axes[I_ANS].axhspan(-band, band, color=BLUE, alpha=.15,
+        # --- F = P+M at that bar's own face ---------------------------------
+        ax2 = axes[2, col]
+        if pnl['primary']:
+            for (name, _), col_c, ls in zip(SETS, (INK, BLUE), ('-', '--')):
+                ax2.plot(tt_f, RES[name]['F'] * SCALE, color=col_c, lw=1.0,
+                         ls=ls, label=f'$F = P + M$, {name} positions')
+        else:
+            ax2.plot(tt_f, F_o * SCALE, color=INK, lw=1.0,
+                     label='$F = P + M$, identified positions')
+        ax2.axhline(0, color=GRID, lw=1.0)
+        band = 0.03 * r['amp'] * SCALE
+        ax2.axhspan(-band, band, color=BLUE, alpha=.15,
                     label='±3 % of peak $|P|$')
-if IMPACT:
-    axes[I_ANS].axvline(r['t_open'] + T0_FIG, color=ORANGE, lw=1.1, ls='--')
-    axes[I_ANS].annotate('  bars part', (r['t_open'] + T0_FIG,
+        if pnl['primary'] and IMPACT:
+            ax2.axvline(r['t_open'] + T0_FIG, color=ORANGE, lw=1.1, ls='--')
+            ax2.annotate('  bars part', (r['t_open'] + T0_FIG,
                                         r['peak'] * SCALE * .6),
                          fontsize=9, color=MUTED)
-axes[I_ANS].set_xlabel('Time (us)')
-axes[I_ANS].set_ylabel(f'Interface force ({UNITS})')
-axes[I_ANS].set_title(f'THE ANSWER — force at the {IFACE}.'
+        ax2.set_xlabel('Time (us)')
+        ax2.set_ylabel(f'Interface force ({UNITS})')
+        title = f'F = P + M at the {bname}put-bar/specimen interface'
+        if pnl['primary']:
+            title += ('' if TENSION else
+                      f' — cannot go negative: residual {r["tensile"]:.3f} '
+                      'of peak')
+            title += '' if ATT is not None else '  (LOSSLESS)'
+        ax2.set_title(title, loc='left', fontsize=10)
+
+        # --- equilibrium, overlaid on BAR's own F panel on a twin y-axis ---
+        if pnl['primary']:
+            axeq = ax2.twinx()
+            axeq.plot(tt_f, equilibrium, color=EQ_COL, lw=.8,
+                      label=f'|F_{BAR} - F_{OTHER}| / max|F_{BAR}|')
+            for _b in (tt_f[_win.start], tt_f[min(_win.stop, N - 1)]):
+                axeq.axvline(_b, color=EQ_COL, lw=0.9, ls=':')
+            axeq.set_ylim(0, max(4 * float(equilibrium[_win].mean()), 0.05))
+            axeq.set_ylabel('equilibrium residual', color=EQ_COL)
+            axeq.tick_params(axis='y', colors=EQ_COL, labelsize=9)
+            axeq.spines['right'].set_color(EQ_COL)
+            for sp in ('top', 'left', 'bottom'): axeq.spines[sp].set_visible(False)
+            h1, l1 = ax2.get_legend_handles_labels()
+            h2, l2 = axeq.get_legend_handles_labels()
+            ax2.legend(h1 + h2, l1 + l2, frameon=False, fontsize=9,
+                      labelcolor=MUTED, loc='lower left')
+        else:
+            ax2.legend(frameon=False, fontsize=9, labelcolor=MUTED,
+                      loc='lower left')
+        ax2.set_xlim(tt_f[0], tt_f[int(0.95 * N)])
+
+    axes_all = axes.flat
+    _Din = abs(PANEL['in']['x'][1] - PANEL['in']['x'][0])
+    _Dout = abs(PANEL['out']['x'][1] - PANEL['out']['x'][0])
+    _title = (f'Force at each bar\'s own interface — in: {_Din:.0f} mm gauge '
+              f'spacing, out: {_Dout:.0f} mm'
+              + ('' if CASE == str(ID['case'])
+                 else f' calibrated on [{str(ID["case"])}]'))
+else:
+    # Single bar identified: the original one-column, three-row layout.
+    fig, axes = plt.subplots(3, 1, figsize=(11, 12), sharex=True)
+    fig.patch.set_facecolor(SURFACE)
+
+    for k, s in enumerate(sig):
+        axes[0].plot(tt_f, s * SCALE, lw=.9,
+                     color=(BLUE, ORANGE, INK)[k % 3],
+                     label=f'gauge {k} at {x_id[k]:.0f} mm (identified)')
+    axes[0].set_ylabel(f'Gauge signal ({USYM})')
+    axes[0].set_title(f'What was measured — {len(sig)} gauges on the {BAR} bar',
+                      loc='left', fontsize=11)
+    _g = max(np.abs(s_).max() for s_ in sig) * SCALE
+    axes[0].set_ylim(-1.3 * _g, 1.35 * _g)
+    axes[0].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
+
+    axes[1].plot(tt_f, r['p'] * SCALE, color=BLUE, lw=.9,
+                 label=r'$P$  (leaving the contact, into the bar)')
+    axes[1].plot(tt_f, r['m'] * SCALE, color=ORANGE, lw=.9,
+                 label=r'$M$  (returning to the contact)')
+    axes[1].axvline(r['t_echo'] + T0_FIG, color=MUTED, lw=1.1, ls='--')
+    axes[1].annotate('  free-end echo arrives, $2L/c$ after the wave left',
+                     (r['t_echo'] + T0_FIG, 0), fontsize=9, color=MUTED,
+                     va='bottom')
+    for _b in (r['t_echo'] + T0_FIG - r['rise'] * 1e3,
+               r['t_echo'] + T0_FIG + r['rise'] * 1e3):
+        axes[1].axvline(_b, color=GRID, lw=1.0, ls=':')
+    axes[1].axhline(0, color=GRID, lw=.8)
+    axes[1].set_ylabel(f'Wave ({USYM})')
+    axes[1].set_title('The two waves separated AT the contact plane — $M$ is '
+                      'flat zero until the echo can get back: causality '
+                      f'residual {r["causality"]:.3f} of peak $|P|$'
+                      + ('' if ATT is not None else '  (LOSSLESS)'),
+                      loc='left', fontsize=10)
+    _pk = max(np.abs(r['p']).max(), np.abs(r['m']).max()) * SCALE
+    axes[1].set_ylim(-1.25 * _pk, 1.55 * _pk)
+    axes[1].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='upper left')
+
+    for (name, _), col, ls in zip(SETS, (INK, BLUE), ('-', '--')):
+        axes[2].plot(tt_f, RES[name]['F'] * SCALE, color=col, lw=1.0, ls=ls,
+                     label=f'$F = P + M$, {name} positions')
+    axes[2].axhline(0, color=GRID, lw=1.0)
+    band = 0.03 * r['amp'] * SCALE
+    axes[2].axhspan(-band, band, color=BLUE, alpha=.15,
+                    label='±3 % of peak $|P|$')
+    if IMPACT:
+        axes[2].axvline(r['t_open'] + T0_FIG, color=ORANGE, lw=1.1, ls='--')
+        axes[2].annotate('  bars part', (r['t_open'] + T0_FIG,
+                                        r['peak'] * SCALE * .6),
+                         fontsize=9, color=MUTED)
+    axes[2].set_xlabel('Time (us)')
+    axes[2].set_ylabel(f'Interface force ({UNITS})')
+    axes[2].set_title(f'THE ANSWER — force at the {IFACE}.'
                       + (' A bonded joint may carry either sign; the unilateral '
                          'check does not apply'
                          if TENSION else
@@ -532,22 +643,16 @@ axes[I_ANS].set_title(f'THE ANSWER — force at the {IFACE}.'
                          f'residual {r["tensile"]:.3f} of peak')
                       + ('' if ATT is not None else '  (LOSSLESS)'),
                       loc='left', fontsize=10)
-axes[I_ANS].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
-axes[I_ANS].set_xlim(tt_f[0], tt_f[int(0.95 * N)])
+    axes[2].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
+    axes[2].set_xlim(tt_f[0], tt_f[int(0.95 * N)])
 
-# --- equilibrium across the interface, BAR vs OTHER -----------------------
-if OTHER is not None:
-    axes[4].plot(tt_f, equilibrium, color=INK, lw=.9)
-    axes[4].axhline(0, color=GRID, lw=.8)
-    for _b in (tt_f[_win.start], tt_f[min(_win.stop, N - 1)]):
-        axes[4].axvline(_b, color=ORANGE, lw=1.1, ls='--')
-    axes[4].set_xlabel('Time (us)')
-    axes[4].set_ylabel(f'|F_{BAR} - F_{OTHER}| / max|F_{BAR}|')
-    axes[4].set_title(f'Equilibrium residual — mean {equilibrium[_win].mean():.3e}, '
-                      f'max {equilibrium[_win].max():.3e} in the analysis window',
-                      loc='left', fontsize=10)
+    axes_all = axes
+    _title = (f'Force at the {IFACE}, reconstructed from two gauges '
+              f'{abs(x_id[1]-x_id[0]):.0f} mm apart on the {BAR} bar'
+              + ('' if CASE == str(ID['case'])
+                 else f' calibrated on [{str(ID["case"])}]'))
 
-for ax in axes:
+for ax in axes_all:
     ax.set_facecolor(SURFACE); ax.grid(True, color=GRID, lw=.7, alpha=.8)
     ax.set_axisbelow(True)
     for sp in ('top', 'right'): ax.spines[sp].set_visible(False)
@@ -556,11 +661,7 @@ for ax in axes:
     ax.xaxis.label.set_color(MUTED); ax.yaxis.label.set_color(MUTED)
     ax.title.set_color(INK)
 
-fig.suptitle(f'Force at the {IFACE}, reconstructed from two gauges '
-             f'{abs(x_id[1]-x_id[0]):.0f} mm apart on the {BAR} bar'
-             + ('' if CASE == str(ID['case'])
-                else f' calibrated on [{str(ID["case"])}]'),
-             x=.006, ha='left', fontsize=13, color=INK)
+fig.suptitle(_title, x=.006, ha='left', fontsize=13, color=INK)
 fig.tight_layout(rect=(0, 0, 1, .975))
 _stem = 'interface_force' + ('' if CASE == str(ID['case']) else f'_{CASE}')
 FIG = (f'{_stem}.png' if ATT is not None else f'{_stem}_lossless.png')

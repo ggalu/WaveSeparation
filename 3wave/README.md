@@ -1428,6 +1428,22 @@ precursor is the precursor. `wavefront_time` anchors on the steepest rise
 search to before the peak stops it finding the final unloading edge, which is
 often the steepest thing in the whole record.
 
+**KNOWN BUG — `wavefront_time` picks the wrong edge on a multi-bounce record.**
+"Before the peak" assumes the *first* rise is also the *largest* one before
+`P` eventually peaks. That fails on `experiment_tension_bar_2` (the connected-bar
+SHTB calibration shot): the striker rings through the whole assembly on a
+~2435 µs period, so several later bounces reach amplitudes comparable to — or
+steeper than — the true first arrival, all still "before the peak" at
+`t ≈ 3350 µs`. Measured: `wavefront_time` returns `t ≈ 3130 µs` as the
+departure, while `P`'s own onset — read directly off the reconstructed wave —
+is at `t ≈ 190–200 µs`, a ~2.9 ms error. Every window this feeds (`t_echo`, the
+causality check, the printed rise times) inherits it silently; the printed
+numbers stay plausible, which is what makes this dangerous rather than just
+wrong. Needs a fix that doesn't rely on "first slope maximum before the global
+peak" for a record with more than one comparable-amplitude arrival — e.g.
+restricting the search to before the *first* return-to-near-zero of `P` rather
+than before its global peak. Not fixed yet.
+
 ### Two position sets, side by side
 
 `reconstruct_interface.py` runs both, because on this shot they differ:

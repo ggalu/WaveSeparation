@@ -626,6 +626,63 @@ for k, nm in enumerate(names):
         print(f'{nm:>7} {a*1e3:12.4f} {b*1e3:12.4f} {a/b-1:+10.2e}')
 
 # --------------------------------------------------------------------------
+# attenuation and dispersion -- only where [.attenuation] is configured
+# --------------------------------------------------------------------------
+# Same method as identify_bar_compression.py's polycarbonate case, extended:
+# fit_attenuation's per-band transfer function gives alpha(f) from magnitude
+# and, when handed c0, a phase-velocity table c_p(f)/c0 from phase -- both from
+# the SAME two-gauge spectra, no boundary condition involved. A metal bar is
+# expected to be lossless (alpha ~ 0), but Pochhammer-Chree dispersion is a
+# property of the CYLINDER, not the material, and is not: with c_p = c0
+# assumed at every frequency, the wavefront edge on the SHTB tension bar's
+# out-0/out-1 pair (120 / 1200 mm) leaks a small transient into P and M right
+# where the edge passes the far gauge. See NOTES.md, open thread 10.
+ATT = {}
+if EXPERIMENT and 'attenuation' in cfg:
+    from identify_attenuation import fit_attenuation
+    ac = cfg['attenuation']
+    print('\n--- attenuation and dispersion, from the two gauges alone '
+          '------------')
+    for bar, off, cnt in (('in', 0, n_in), ('out', n_in, len(names) - n_in)):
+        if cnt < 2:
+            continue
+        try:
+            a = fit_attenuation(t, signals[off:off + cnt], id_pos[off:off + cnt],
+                                arrival[off:off + cnt],
+                                arrival[off:off + cnt] + tau[off:off + cnt],
+                                f_lo=float(ac.get('f_lo', 2.0)),
+                                f_hi=float(ac.get('f_hi', 50.0)),
+                                snr=float(ac.get('snr', 0.005)),
+                                c0=c0_id)
+        except ValueError as exc:
+            print(f'{bar:>5} not measurable: {exc}')
+            continue
+        ATT[bar] = a
+        fb, ab = a['table']
+        mid = len(fb) // 2
+        print(f'{bar:>5} single-wave window {a["span"]*1e3:.0f} us, '
+              f'{a["pairs"]} gauge pair(s), band {a["f_lo"]:.0f}-'
+              f'{a["f_hi"]:.0f} kHz')
+        print(f'{"":>5} alpha at {fb[mid]:.0f} / {a["f_hi"]:.0f} kHz: '
+              f'{ab[mid]:.2e} / {ab[-1]:.2e} /mm')
+        if a['dispersion_table'] is None:
+            # Every pair on this bar runs opposite to propagation (the wave
+            # reaches the larger-x gauge first) -- see identify_attenuation's
+            # direction note. A single reversed pair cannot be corrected for,
+            # only detected; this bar simply gets no dispersion table.
+            print(f'{"":>5} c_p/c0: not measurable -- the only gauge pair '
+                  'here runs opposite to propagation')
+        else:
+            fbd, cpr = a['dispersion_table']
+            print(f'{"":>5} c_p/c0 at {fbd[mid]:.0f} / {a["f_hi"]:.0f} kHz: '
+                  f'{cpr[mid]:.4f} / {cpr[-1]:.4f}  (scalar c_p = {a["c_p"]:.1f} '
+                  f'mm/ms against c0 = {c0_id:.1f})')
+            print(f'{"":>5} far gauge predicted from near, relative L2: '
+                  f'lossless {a["misfit_lossless"]:.2e}, alpha only '
+                  f'{a["misfit"]:.2e}, alpha+dispersion '
+                  f'{a["misfit_dispersion"]:.2e}')
+
+# --------------------------------------------------------------------------
 # free-end null test -- the only check here that needs no ground truth
 # --------------------------------------------------------------------------
 # The far end of the output bar is a free surface, so the stress there is zero
@@ -781,6 +838,11 @@ for b, off, cnt in (('in', 0, n_in), ('out', n_in, len(names) - n_in)):
     _out[f'L_free_{b}'] = L_free[off:off + cnt]
     if EXPERIMENT:
         _out[f'tape_{b}'] = np.asarray(true_pos[off:off + cnt], float)
+    if b in ATT:
+        _out[f'alpha_f_{b}'], _out[f'alpha_{b}'] = ATT[b]['table']
+        if ATT[b]['dispersion_table'] is not None:
+            _out[f'dispersion_f_{b}'], _out[f'dispersion_{b}'] = \
+                ATT[b]['dispersion_table']
 np.savez(IDENT_FILE, **_out)
 print(f'\nwrote {IDENT_FILE}: c0={c0_id:.1f} for {", ".join(BARS)}')
 

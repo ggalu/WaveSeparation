@@ -574,7 +574,15 @@ L_input = 2760.0                  # corrected -- initial 3000 mm estimate was wr
 diameter = 16.0
 
 [experiment_tension_bar.output_bar]
-L_output = 2800.0                 # corrected -- initial 3000 mm estimate was wrong
+L_output = 2777.0                 # re-corrected -- 2800 (itself a correction
+                                   # from an initial 3000 mm estimate) still
+                                   # disagreed with the tape L_free_ref by
+                                   # exactly one coupler length. Confirmed by
+                                   # the rig operator: pos_in[in-0]=930,
+                                   # L_JOINT=23, and L_free_ref=3730 (which
+                                   # already includes the coupler) are right,
+                                   # which pins the error here: 930+23+2777 =
+                                   # 3730, matching L_free_ref exactly.
 diameter = 16.0
 
 [experiment_tension_bar.specimen]  # the rigid 23 mm coupler, bar material --
@@ -630,7 +638,10 @@ L_input = 2760.0                  # corrected -- initial 3000 mm estimate was wr
 diameter = 16.0
 
 [experiment_tension_bar_2.output_bar]
-L_output = 2800.0                 # corrected -- initial 3000 mm estimate was wrong
+L_output = 2777.0                 # see [experiment_tension_bar.output_bar]'s
+                                   # comment -- same rig, same re-correction:
+                                   # 930 (pos_in[in-0]) + 23 (L_JOINT) + 2777
+                                   # = 3730 = L_free_ref.
 diameter = 16.0
 
 [experiment_tension_bar_2.specimen]
@@ -640,6 +651,19 @@ length = 23.0
 threshold = 0.05
 lead = 50.0
 baseline = true
+
+[experiment_tension_bar_2.attenuation]
+# Steel/aluminium bar, so material damping is expected to be negligible -- this
+# is here for the PHASE half of fit_attenuation, not the magnitude half. With
+# no dispersion supplied, `separate` assumes c_p = c0 at every frequency, and
+# the two out-bar gauges (120 / 1200 mm, D ~ 1080 mm) disagree enough about the
+# wavefront edge's shape to leak a small (~5 % of peak) transient into P and M
+# right where the edge passes the far gauge -- see NOTES.md, open thread 10.
+# f_hi is also the BAND LIMIT of the returned tables, same as the PC bar.
+f_lo = 2.0                        # kHz
+f_hi = 50.0                       # kHz
+snr = 0.01                        # keep bins whose |F1| is above this fraction
+                                  # of the spectral peak
 
 [experiment_tension_bar_2.null]
 window = 0.75

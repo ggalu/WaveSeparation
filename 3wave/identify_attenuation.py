@@ -76,7 +76,7 @@ __all__ = ['fit_attenuation']
 
 
 def fit_attenuation(t, signals, positions, f1, f2, f_lo=2.0, f_hi=50.0,
-                    band=4.0, snr=0.005, margin=0.03, monotone=True):
+                    band=4.0, snr=0.005, margin=0.03, monotone=True, c0=None):
     """
     Attenuation alpha(f) and phase velocity c_p from two or more gauges.
 
@@ -113,6 +113,12 @@ def fit_attenuation(t, signals, positions, f1, f2, f_lo=2.0, f_hi=50.0,
         this range, and the constraint removes the odd band that lands low on
         noise without changing the fit measurably (0.1597 -> 0.1592 residual on
         the PC record).
+    c0 : float, optional
+        The bar's identified (round-trip) wave speed. Supplying it turns on the
+        BANDED phase-velocity fit -- `dispersion_table` below -- which is the
+        same per-band split `alpha` already gets, applied to phase instead of
+        magnitude. Without it only the single scalar `c_p` is returned, as
+        before.
 
     Returns
     -------
@@ -122,7 +128,13 @@ def fit_attenuation(t, signals, positions, f1, f2, f_lo=2.0, f_hi=50.0,
                   for comparison with literature. NOT what `table` contains.
         c_p     : phase velocity from the transfer-function phase [length/time].
                   An INDEPENDENT estimate of c0 -- it uses the gauge-to-gauge
-                  phase, where the round trip 2L/c uses reflections.
+                  phase, where the round trip 2L/c uses reflections. A single
+                  scalar, averaged over the whole band -- see `dispersion_table`
+                  for the frequency-resolved version.
+        dispersion_table : (freq, c_p/c0) pair, ready for
+                  separate(dispersion=...) -- None unless `c0` was given. Same
+                  bands as `table`, anchored to 1.0 at DC (the quasi-static
+                  Pochhammer-Chree limit, which is what c0 itself measures).
         misfit  : relative L2 of the far gauge predicted from the near one,
                   with the table, over the band. Compare `misfit_lossless`.
         misfit_lossless : the same with alpha = 0. The gap is the evidence.
@@ -160,34 +172,78 @@ def fit_attenuation(t, signals, positions, f1, f2, f_lo=2.0, f_hi=50.0,
 
     keep = (f >= f_lo) & (f <= f_hi)
     edges = np.arange(0.0, f_hi + band, band)
-    fb, ab, wb = [], [], []
+    fb, ab, wb, cpb = [], [], [], []
     for lo, hi in zip(edges[:-1], edges[1:]):
+        f_c = 0.5 * (lo + hi)
         num = den = 0.0
+        cp_num = cp_den = 0.0
         for j, k in pairs:
             w = np.abs(E[j])
             m = (f >= lo) & (f < hi) & keep & (w > snr * w.max())
             if m.sum() < 3:
                 continue
+            wm, H = w[m], E[k][m] / E[j][m]
             # -ln|H| / dx, averaged over the band and weighted by where the
             # near gauge has energy. Bins with no signal carry no information
             # and must not be allowed to vote.
-            ln = np.log(np.abs(E[k][m] / E[j][m]))
-            num += float(np.sum(w[m] * -ln)) / (x[k] - x[j])
-            den += float(np.sum(w[m]))
+            ln = np.log(np.abs(H))
+            w_pair = float(np.sum(wm))
+            num += float(np.sum(wm * -ln)) / (x[k] - x[j])
+            den += w_pair
+            # `pairs` orders j, k by POSITION (x[k] > x[j]), which only
+            # coincides with propagation order (j reached first) when the
+            # wave travels toward increasing x -- true for a bar loaded at its
+            # own x = 0, false for e.g. this rig's "in" bar, whose loading
+            # wave travels from the striker end toward the interface, i.e.
+            # toward DECREASING x. alpha's |ratio| does not care which way
+            # that is; a delay does, and f1[k] - f1[j] < 0 is the tell. Skip
+            # the phase fit rather than report a cp of the wrong sign.
+            lag_jk = f1[k] - f1[j]
+            if c0 is not None and f_c > 0 and lag_jk > 0:
+                # Phase, banded the same way as alpha above but averaged as a
+                # weighted COMPLEX mean rather than raw angles -- robust to a
+                # noisy bin sitting near the +-pi branch cut, which a naive
+                # angle average is not. angle(H) is the residual delay beyond
+                # each gauge's own arrival (E is already de-lagged to that in
+                # _edge_spectrum), so adding the known broadband lag `lag_jk`
+                # turns it into an absolute phase velocity -- the same split
+                # `_misfit`'s scalar `tau` makes below, just kept per band
+                # instead of collapsed to one number.
+                Hc = np.sum(wm * H / np.abs(H))
+                if abs(Hc) > 0:
+                    res_tau = -float(np.angle(Hc)) / (2.0 * np.pi * f_c)
+                    cp = (x[k] - x[j]) / (lag_jk + res_tau)
+                    cp_num += w_pair * cp
+                    cp_den += w_pair
         if den > 0:
-            fb.append(0.5 * (lo + hi))
+            fb.append(f_c)
             ab.append(max(num / den, 0.0))     # alpha < 0 would amplify: reject
             wb.append(den)
+            cpb.append(cp_num / cp_den if cp_den > 0 else np.nan)
     if len(fb) < 2:
         raise ValueError('not enough usable bands; loosen snr or widen the band')
 
-    fb, ab, wb = np.array(fb), np.array(ab), np.array(wb)
+    fb, ab, wb, cpb = np.array(fb), np.array(ab), np.array(wb), np.array(cpb)
     if monotone:
         ab = np.maximum.accumulate(ab)
     # Anchor at DC: a bar does not attenuate a static load.
     if fb[0] > 0:
-        fb, ab = np.concatenate(([0.0], fb)), np.concatenate(([0.0], ab))
+        fb, ab, cpb = (np.concatenate(([0.0], fb)), np.concatenate(([0.0], ab)),
+                       np.concatenate(([np.nan], cpb)))
     table = (fb, ab)
+
+    dispersion_table = None
+    if c0 is not None and np.any(~np.isnan(cpb)):
+        # Anchor c_p(0) = c0 itself: the quasi-static Pochhammer-Chree limit as
+        # f -> 0 IS the elementary bar speed, which is exactly what the
+        # round-trip echo measures c0 from in the first place. A band with no
+        # correctly-oriented pair (see the direction note above) falls back to
+        # 1.0 -- "not measured", not "measured flat" -- rather than leave a
+        # NaN in a table `np.interp` cannot handle.
+        ratio = np.where(np.isnan(cpb), 1.0, cpb / c0)
+        if fb[0] == 0.0:
+            ratio[0] = 1.0
+        dispersion_table = (fb, ratio)
 
     k_lin = float(np.sum(wb * fb[-len(wb):] * ab[-len(wb):])
                   / np.sum(wb * fb[-len(wb):] ** 2))
@@ -197,11 +253,29 @@ def fit_attenuation(t, signals, positions, f1, f2, f_lo=2.0, f_hi=50.0,
     misfit, tau = _misfit(E[j], E[k], f, x[k] - x[j], alpha_f, f_hi)
     lossless, _ = _misfit(E[j], E[k], f, x[k] - x[j], np.zeros_like(f), f_hi)
     lag = f1[k] - f1[j]
-    c_p = (x[k] - x[j]) / (lag + tau) if (lag + tau) != 0 else np.nan
+    # lag <= 0 means `pairs[0]` runs opposite to propagation (see the
+    # direction note above) -- (lag + tau) is then not a physical transit
+    # time and c_p from it would carry the wrong sign.
+    c_p = ((x[k] - x[j]) / (lag + tau)
+           if lag > 0 and (lag + tau) != 0 else float('nan'))
+
+    # The dispersion table's own honesty check, same idea as misfit/misfit_
+    # lossless above: predict the far gauge from the near one using the FULL
+    # frequency-resolved delay dx/c_p(f) - lag instead of _misfit's one
+    # constant tau, and see whether that -- not any boundary condition --
+    # is what actually brings the residual down.
+    misfit_dispersion = None
+    if dispersion_table is not None:
+        cp_f = c0 * np.interp(f, fb, ratio)
+        tau_f = (x[k] - x[j]) / cp_f - lag
+        misfit_dispersion = _misfit_freq(E[j], E[k], f, x[k] - x[j], alpha_f,
+                                         tau_f, f_hi)
 
     return dict(table=table, k=k_lin, c_p=float(c_p), misfit=misfit,
-                misfit_lossless=lossless, n_window=n, pairs=len(pairs),
-                span=span, f_lo=f_lo, f_hi=f_hi, band=band, tau=float(tau))
+                misfit_lossless=lossless, dispersion_table=dispersion_table,
+                misfit_dispersion=misfit_dispersion, n_window=n,
+                pairs=len(pairs), span=span, f_lo=f_lo, f_hi=f_hi, band=band,
+                tau=float(tau))
 
 
 def _edge_spectrum(s, t_arrive, dt, n, n_fft, f):
@@ -243,3 +317,18 @@ def _misfit(E_near, E_far, f, dx, alpha_f, f_hi):
         if v < best[0]:
             best = (v, tau)
     return best
+
+
+def _misfit_freq(E_near, E_far, f, dx, alpha_f, tau_f, f_hi):
+    """
+    Same idea as `_misfit`, but with a FREQUENCY-RESOLVED delay `tau_f(f)`
+    instead of one constant `tau` -- what the dispersion table predicts, rather
+    than what a single scalar can. Not a fit: `tau_f` comes in fixed, so a drop
+    against `misfit`/`misfit_lossless` is the dispersion table's own evidence,
+    the same status `identify_attenuation`'s magnitude misfit already has.
+    """
+    m = f <= f_hi
+    decay = np.exp(-alpha_f[m] * dx)
+    pred = E_near[m] * np.exp(-2j * np.pi * f[m] * tau_f[m]) * decay
+    ref = float(np.sum(np.abs(E_far[m]) ** 2))
+    return float(np.sum(np.abs(pred - E_far[m]) ** 2)) / ref

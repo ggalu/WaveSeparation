@@ -144,6 +144,54 @@ repeated here; this file is only for what those do not record.
    disagreement between them would be the diagnostic. `fit_attenuation` already
    loops over all pairs; it just only has one here.
 
+10. ~~**PLAN — identify a `(freq, cp/c0)` dispersion table for the SHTB tension
+    bar's `out` bar...**~~ **Done 2026-09-02.** `fit_attenuation` grew an
+    optional `c0` argument (identify_attenuation.py): supplying it turns on a
+    per-band phase fit run alongside the existing per-band magnitude (alpha)
+    fit -- same edge spectra, same bands, same weights, just averaging
+    `angle(E[k]/E[j])` instead of `-ln|E[k]/E[j]|` -- and returns the result as
+    `dispersion_table` (a `(freq, cp/c0)` ratio, anchored to `1.0` at DC)
+    alongside the existing `table` (alpha). `identify_bar_tension.py` now
+    calls it whenever `[.attenuation]` is configured (added for
+    `experiment_tension_bar_2`) and writes `dispersion_f_{b}`/`dispersion_{b}`
+    into `bar_identified.npz`; `reconstruct_interface.py` reads them into a new
+    `DISP` (plus `--no-dispersion`, symmetric with `--no-attenuation`) and
+    passes them through `reconstruct()`, `free_end()`, and the OTHER-bar call.
+
+    **Measured, on `experiment_tension_bar_2`'s `out` bar:** far-gauge-
+    predicted-from-near misfit drops **lossless 4.08e-02 -> alpha only
+    2.49e-02 -> alpha+dispersion 1.82e-02** (`identify_bar_tension.py`'s own
+    printed check). The artifact itself: comparing the same t = 500-750 µs
+    window of `interface_force.dat` before and after, `P`'s bump shrinks
+    **~4.8 % -> ~2.9 % (alpha alone) -> ~2.3 % (alpha+dispersion)** of the
+    plateau, and `M`'s peak excursion there **~427 -> ~168** [N]. A real,
+    monotonic improvement, consistent with genuine dispersion -- but not a
+    clean elimination: only one gauge pair (1080 mm baseline) exists on this
+    bar, same limitation thread 9 already flags for `alpha`, and a single pair
+    cannot fully separate genuine dispersion from anything else that shifts
+    phase with distance on this rig (e.g. the ~10 mm identified-vs-tape
+    position disagreement already on record here). Treat the resulting curve
+    as good enough to suppress the edge artifact, not as a first-principles
+    Pochhammer-Chree measurement to publish.
+
+    **One thing the plan did not anticipate, found while implementing it: pair
+    DIRECTION matters for phase, not just position.** `fit_attenuation`'s
+    `pairs` are ordered by `x[k] > x[j]`, silently assuming the wave reaches
+    the smaller-x gauge first -- true for this rig's `out` bar (loaded at its
+    own `x = 0`) but FALSE for the `in` bar, whose loading wave travels from
+    the striker end **toward** the interface, i.e. toward decreasing `x`. That
+    gauge pair has `f1[k] - f1[j] < 0`: alpha survives it anyway (an amplitude
+    ratio does not care about direction, only distance), but the phase-derived
+    `c_p` does not, and came out **negative** (`-5009.8` mm/ms) before this was
+    caught. Guarded now: a pair with `lag <= 0` is excluded from the phase fit
+    per band (`identify_attenuation.py`, the "direction note"), so a
+    wrong-orientation pair reports "not measurable" rather than a wrong-sign
+    number -- confirmed on the `in` bar, which has no other pair to fall back
+    on and now prints exactly that. The existing scalar `c_p`/`tau`/`misfit`
+    path (present before this work, just never exercised in this direction)
+    inherits the same guard. Worth remembering for any future rig where a
+    gauge pair's `x`-order and arrival-order can disagree.
+
 ## Traps worth not rediscovering
 
 - **The boundary conditions cannot pin `alpha`, only demand it.** Fitting
