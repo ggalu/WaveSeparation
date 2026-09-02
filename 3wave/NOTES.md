@@ -174,6 +174,58 @@ repeated here; this file is only for what those do not record.
     as good enough to suppress the edge artifact, not as a first-principles
     Pochhammer-Chree measurement to publish.
 
+    **Addendum 2026-09-03 -- the `in` bar's own position error, chased and NOT
+    explained.** Comparing `F_in(t)` and `F_out(t)` (independently
+    reconstructed, each from only that bar's own two gauges) over the first
+    loading plateau shows `in` visibly noisier than `out`. A direct sweep of
+    the assumed `in-1` position against plateau flatness (std over t =
+    350-850 us) finds the optimum at **x = 123.5 mm**, `D = 806.5 mm` --
+    nowhere near the identified **138.01 mm** (`D = 792 mm`, arrival-lag
+    route) and close to tape's **120 mm** (`D = 810 mm`). Tried to explain the
+    ~18 mm gap as the same edge-broadening bias `identify_bar_compression.py`
+    corrects for on the PC bar, three ways, all against the ACTUAL identified
+    `alpha(f)`/`c_p(f)` for this bar (borrowed onto `in` from `out`):
+
+    - Propagate `TEMPLATE` itself through the identified dispersion by the
+      raw-lag-implied extra distance, then re-run the SAME `_xcorr`/
+      `_extremum` search real arrivals are measured with, to see how far the
+      peak moves. Predicts **~0** for every gauge -- this bar's dispersion
+      (+-2-4 %, oscillating both sides of 1, unlike the PC bar's monotonic
+      loss) does not shift a discrete correlation peak by a numerically
+      detectable amount.
+    - Analytical group delay, `distance x [(1/c_p(f) - 1/c0) + f d/df(1/c_p(f))]`,
+      energy-weighted over `TEMPLATE`'s own spectrum in the fitted 2-50 kHz
+      band. Predicts a real, distance-growing bias (in-1: 1.2 us =~ 6 mm) --
+      but applying it moves `in-1` from 138 mm to 144 mm, AWAY from the
+      sweep's 123.5 mm, not toward it. Checked the sign twice; the model
+      predicts the wrong direction, not a slip.
+    - `fit_attenuation`'s own grid-searched `tau`, applied directly between
+      `in-0` and each other gauge (dummy positions so the pair always runs
+      forward, sidestepping the direction guard). Gets the sign right this
+      time (in-1: +0.8 us of the +2.8 us needed, 29 %) but the misfit for
+      these cross-bar fits is 10-18 %, four to five times worse than the
+      same-bar `out0`/`out1` fit (2.5-4 %) -- the single-transfer-function
+      model does not describe two gauges either side of the coupler well, so
+      this `tau` is not trusted either.
+
+    None of the three reproduces the gap. **Conclusion: this is very likely
+    NOT a bulk-dispersion correlation-peak bias** -- if it were, at least one
+    physically-motivated route should have recovered it. More likely
+    something specific to this one shot (asymmetric noise between `in-0`/
+    `in-1`, a slightly non-planar strike, or the sweep's own optimum being
+    pulled around by noise in that one window). **Shipped the pragmatic
+    fallback instead**, not the derived one: `[experiment_tension_bar_2.
+    position_override]` in config.toml sets `in-1 = 120.0` (tape) directly.
+    `identify_bar_tension.py` applies it right after computing `id_pos`, prints
+    the override plainly (`gauge positions` table then reads `error +0.000` for
+    that gauge, by construction), and skips fitting that bar's own `alpha(f)`/
+    `c_p(f)` afterward -- `id_pos` no longer agrees with the arrival timing
+    that fit assumes -- borrowing the `out` bar's fit in full instead, same
+    justification as the dispersion borrowing above. Labelled `(overridden)`
+    everywhere it would otherwise say `(identified)`, in the printed tables and
+    in the figure. This is an empirical fallback, not a measurement -- worth
+    revisiting if a future shot on this rig makes the mechanism clearer.
+
     **One thing the plan did not anticipate, found while implementing it: pair
     DIRECTION matters for phase, not just position.** `fit_attenuation`'s
     `pairs` are ordered by `x[k] > x[j]`, silently assuming the wave reaches

@@ -626,6 +626,20 @@ L_free_ref = 3730.0                # in-0 (force_in1) -> output bar's far free e
 L_free_ref_gauge = "in-0"
 L_free_ref_tol = 5.0               # what the tape is good to [mm]
 
+[experiment_tension_bar_2.position_override]
+# in-1 identifies at 138.01 mm from the arrival-lag route, ~18 mm off tape
+# (120 mm) and outside its own +-3.94 mm tape tolerance -- an order of
+# magnitude worse than every other gauge on this rig manages. Investigated at
+# length (NOTES.md, thread 10 addendum): neither the identified alpha(f), nor
+# the identified c_p(f) (borrowed from the out bar), nor a direct near/far
+# transfer-function fit between in-0 and in-1 reproduces this gap under any
+# sign convention that also gets the DIRECTION right. A direct sweep of the
+# assumed spacing against plateau flatness in the reconstructed F = P+M lands
+# at ~123.5 mm -- close to tape, nowhere near the identified value. Tape is
+# used here as the more defensible of the two, NOT because it has been shown
+# correct; it is an empirical fallback, not a measurement.
+"in-1" = 120.0
+
 [experiment_tension_bar_2.columns]
 time = 0
 "in-0"  = 1

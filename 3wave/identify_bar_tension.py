@@ -536,6 +536,38 @@ L_free = L_FREE_REF - c0_id * lag
 id_pos = np.where(np.arange(len(names)) >= n_in,
                   L_OUTPUT - L_free, L_free - L_OUTPUT - L_JOINT)
 
+# --------------------------------------------------------------------------
+# position override -- an EMPIRICAL fallback, not a measurement
+# --------------------------------------------------------------------------
+# [.position_override] names gauges whose arrival-lag position is not trusted
+# -- investigated and not explained by anything this script or
+# identify_attenuation.py can measure (NOTES.md, thread 10 addendum: neither
+# alpha(f), nor c_p(f), nor a direct near/far transfer-function fit reproduces
+# the gap). Overriding trades a value this script computed for one a tape
+# supplied; OVERRIDDEN records which BAR that touches, so the attenuation
+# section below knows not to fit that bar's own (now geometry-inconsistent)
+# pair -- id_pos would no longer agree with the arrival timing that pair's
+# alpha/c_p fit assumes.
+POS_OVERRIDE = dict(cfg.get('position_override', {}))
+OVERRIDDEN = set()
+if POS_OVERRIDE:
+    print('\n--- position override, from config -- NOT identified '
+          '---------------')
+    print('tape used as the more defensible of the two, not because it has '
+          'been shown\ncorrect -- see [.position_override] in config.toml '
+          'for why.')
+    for nm, val in POS_OVERRIDE.items():
+        if nm not in names:
+            raise SystemExit(f'position_override names {nm!r}, not one of '
+                             f'{names}')
+        k = names.index(nm)
+        print(f'{nm:>7}  identified {id_pos[k]:8.2f} mm -> override '
+              f'{float(val):8.2f} mm  ({id_pos[k]-float(val):+.2f} mm)')
+        id_pos[k] = float(val)
+        L_free[k] = (id_pos[k] + L_OUTPUT + L_JOINT if k < n_in
+                     else L_OUTPUT - id_pos[k])
+        OVERRIDDEN.add(names[k].split('-')[0])
+
 # What the tape costs each position. L_free_k = L_free_ref (1 - 2 lag_k / Q), so
 # d(L_free_k) = (L_free_k / L_free_ref) d(L_free_ref); and x is L_free plus a
 # CONSTANT (L_OUTPUT, L_JOINT) that the tape error does not touch, so the
@@ -554,15 +586,18 @@ for k, nm in enumerate(names):
 
 print('\n--- gauge spacing D '
       '-------------------------------------------------------')
-print(f'{"bar":>7} {"lag [us]":>12} {"D = c0 dt":>12} {_ref_lbl:>9} {"error":>9}')
+print(f'{"bar":>7} {"lag [us]":>12} {"D = c0 dt":>12} {"D (used)":>10} '
+      f'{_ref_lbl:>9} {"error":>9}')
 for bar, off, cnt in (('in', 0, n_in), ('out', n_in, len(names) - n_in)):
     if cnt < 2:
         continue
     dl = abs(lag[off + 1] - lag[off])
-    D_id = c0_id * dl
+    D_lag = c0_id * dl                      # from raw timing, always printed
+    D_used = abs(id_pos[off + 1] - id_pos[off])   # what separate() actually gets
     D_true = abs(true_pos[off + 1] - true_pos[off])
-    print(f'{bar:>7} {dl*1e3:12.4f} {D_id:12.3f} {D_true:9.2f} '
-          f'{D_id-D_true:+9.3f}')
+    note = '  (overridden)' if bar in OVERRIDDEN else ''
+    print(f'{bar:>7} {dl*1e3:12.4f} {D_lag:12.3f} {D_used:10.3f} {D_true:9.2f} '
+          f'{D_used-D_true:+9.3f}{note}')
 
 # The errors in the "error" columns are what the TIMING costs, with L_free_ref
 # taken as exact. The tape error is separate and adds on top -- but NOT
@@ -646,6 +681,16 @@ if EXPERIMENT and 'attenuation' in cfg:
     for bar, off, cnt in (('in', 0, n_in), ('out', n_in, len(names) - n_in)):
         if cnt < 2:
             continue
+        if bar in OVERRIDDEN:
+            # id_pos here came from config, not from arrival[]/tau[] -- fitting
+            # this bar's own pair would divide a tape-supplied dx by an
+            # arrival-lag-derived lag, two numbers that no longer describe the
+            # same measurement. Borrowed from the other bar below instead.
+            print(f'{bar:>5} not fit: its position was overridden above, so '
+                  'its own alpha(f)/c_p(f)\n      would divide an '
+                  'arrival-lag delay by a tape-supplied distance -- borrowed '
+                  'below instead')
+            continue
         try:
             a = fit_attenuation(t, signals[off:off + cnt], id_pos[off:off + cnt],
                                 arrival[off:off + cnt],
@@ -691,7 +736,14 @@ if EXPERIMENT and 'attenuation' in cfg:
     # is a property of the CYLINDER (Pochhammer-Chree), not of which half of
     # it a gauge happens to sit on.
     for bar, other in (('in', 'out'), ('out', 'in')):
-        if (bar in ATT and ATT[bar]['dispersion_table'] is None
+        if bar in OVERRIDDEN and bar not in ATT and other in ATT:
+            # Not fit at all above -- borrow the WHOLE result, alpha included,
+            # not just c_p(f): its own position being untrustworthy sinks
+            # both halves of the fit equally, not only the phase half.
+            ATT[bar] = ATT[other]
+            print(f'{bar:>5} alpha(f), c_p/c0: borrowed from the {other} bar '
+                  'in full -- own position overridden, not fit')
+        elif (bar in ATT and ATT[bar]['dispersion_table'] is None
                 and other in ATT and ATT[other]['dispersion_table'] is not None):
             ATT[bar]['dispersion_table'] = ATT[other]['dispersion_table']
             print(f'{bar:>5} c_p/c0: borrowed from the {other} bar -- same rod '
@@ -889,8 +941,9 @@ for col, (bar, off, cnt) in enumerate(COLS):
 
     ax0 = axes[0, col]
     for j in range(cnt):
+        src = 'overridden' if names[off + j] in POS_OVERRIDE else 'identified'
         ax0.plot(t_null, bsig[j] * SCALE, lw=.9, color=(BLUE, ORANGE)[j % 2],
-                 label=f'{names[off + j]} at {bx[j]:.0f} mm (identified)')
+                 label=f'{names[off + j]} at {bx[j]:.0f} mm ({src})')
     ax0.set_ylabel(f'Signal ({USYM})')
     ax0.set_title(f'What was measured — {cnt} gauges on the {bar} bar',
                   loc='left', fontsize=11)
@@ -951,8 +1004,9 @@ for col, (bar, off, cnt) in enumerate(COLS):
     F_b = p_b + m_b
 
     ax2 = axes[2, col]
+    pos_lbl = 'overridden position' if bar in OVERRIDDEN else 'identified positions'
     ax2.plot(t_null, F_b * SCALE, color=INK, lw=.9,
-             label='$F = P + M$, identified positions')
+             label=f'$F = P + M$, {pos_lbl}')
     ax2.axhline(0, color=GRID, lw=1.0)
     ax2.set_xlabel('Time (ms)')
     ax2.set_ylabel(f'Interface force ({USYM})')
