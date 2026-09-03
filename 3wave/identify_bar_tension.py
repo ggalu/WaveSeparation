@@ -1,3 +1,8 @@
+# -*- coding: utf-8 -*-
+# @Author: Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
+# @Date:   2026-09-03 09:38:06
+# @Last Modified by:   Georg C. Ganzenmueller, Albert-Ludwigs Universitaet Freiburg, Germany
+# @Last Modified time: 2026-09-03 11:01:52
 """
 Identify gauge positions, gauge spacing and the bar wave speed from a
 connected-bar calibration shot -- no specimen, both bars bolted together.
@@ -153,6 +158,9 @@ EXPERIMENT = CASE in config.EXPERIMENT_CASES
 # The measurements a tape and a scale supply. Bar lengths are easy; the gauge
 # positions are not, and are never read here -- they are what is recovered.
 # --------------------------------------------------------------------------
+print("*********************")
+print("*** CASE: ", CASE)
+print("*********************")
 cfg = config.load(CASE)
 
 # The whole identification models the bolted-together assembly as ONE uniform
@@ -198,6 +206,17 @@ L_FREE_REF_CFG = (ARGS.L_free_ref if ARGS.L_free_ref is not None
 L_FREE_REF_GAUGE = cfg.get('L_free_ref_gauge')   # None = "whichever is ref"
 L_FREE_REF_TOL = (ARGS.L_free_ref_tol if ARGS.L_free_ref_tol is not None
                   else cfg.get('L_free_ref_tol', 2.0))    # [mm]
+
+# c0 can come from two places (see the "c0" section below): the classic
+# 2 L_free_ref / Q, averaged over however many of the up-to-4 gauges pass the
+# 1 % outlier check (robust to any ONE gauge's echo being bad, but crosses the
+# threaded joint twice from an in-bar reference); or the output bar's own two
+# free-end echoes alone (never crosses the joint, but has no redundancy if
+# ONE of those two echoes is itself mis-detected -- see NOTES.md/the
+# calibration_tension self-check, where this broke). Default false: the
+# joint-crossing route degrades gracefully and is the safe default; opt a
+# case into the output-bar-only route once its two echoes are known to agree.
+USE_ONLY_OUT_FOR_C0 = bool(cfg.get('use_only_out_for_c0', False))
 
 
 # --------------------------------------------------------------------------
@@ -468,11 +487,8 @@ else:
 
 if L_FREE_REF_CFG is None:
     L_FREE_REF = L_FREE_REF_TRUE
-    L_FREE_REF_SRC = ('model geometry -- no L_free_ref configured, '
-                      'so this is a SELF-CHECK')
 elif L_FREE_REF_GAUGE in (None, names[REF]):
     L_FREE_REF = L_FREE_REF_CFG
-    L_FREE_REF_SRC = f'tape to {names[REF]}'
 elif L_FREE_REF_GAUGE in names:
     # The tape may have reached any gauge, not the one the record happens to
     # pick as reference. L_free_k = L_free_ref (1 - 2 lag_k / Q) inverts to
@@ -486,8 +502,6 @@ elif L_FREE_REF_GAUGE in names:
                          'non-positive baseline; check the record')
     L_FREE_REF = L_FREE_REF_CFG / _scale
     L_FREE_REF_TOL = L_FREE_REF_TOL / _scale
-    L_FREE_REF_SRC = (f'tape to {L_FREE_REF_GAUGE} ({L_FREE_REF_CFG:.1f} mm), '
-                      f'referred to {names[REF]} by /{_scale:.5f}')
 else:
     raise SystemExit(
         f'L_free_ref_gauge {L_FREE_REF_GAUGE!r} is not one of {names}')
@@ -503,31 +517,103 @@ if (L_FREE_REF_CFG is not None
           f'{L_FREE_REF_TOL:.1f} mm tolerance. Has the gauge layout or a\n'
           f'!! bar length changed since L_free_ref was measured?')
 
-c0_id = 2.0 * L_FREE_REF / Q_MEAN
+# --------------------------------------------------------------------------
+# c0 -- from the output bar alone (diagnostic table, always) -- never
+# through the joint
+# --------------------------------------------------------------------------
+# out-0 and out-1 sit entirely on the output bar: their own free-end echoes
+# never touch the joint, and neither does the direct-arrival lag on either
+# bar's own two gauges -- the joint's delay, wherever it physically sits, is
+# common to both legs of a direct-arrival lag and cancels in the difference.
+# Four independent, coupler-free measurements below, none of them consuming
+# L_free_ref at all; distance is whatever the wave actually travelled between
+# t1 and t2 -- ONE-WAY for a direct-arrival lag, ROUND-TRIP (2x tape L_free)
+# for an echo -- so c0 = distance / dt in every row, no hidden factor of 2.
+# Printed regardless of USE_ONLY_OUT_FOR_C0, as a cross-check either way.
+_OUT0, _OUT1 = n_in, n_in + 1
+print('\n--- c0, from the output bar alone -- never crosses the coupler '
+      '----------')
+print(f'{"method":>34} {"distance":>10} {"t1":>9} {"t2":>9} '
+      f'{"dt":>9} {"c0":>10}')
+print(f'{"":>34} {"[mm]":>10} {"[ms]":>9} {"[ms]":>9} '
+      f'{"[us]":>9} {"[mm/ms]":>10}')
 
-print('\n--- wave speed '
-      '------------------------------------------------------------')
-print(f'L_free_ref ({names[REF]} -> free end) : {L_FREE_REF:.1f} '
-      f'+- {L_FREE_REF_TOL:.1f} mm')
-print(f'  source          : {L_FREE_REF_SRC}')
-print(f'{"gauge":>7} {"Q = 2 L_free_ref/c0 [ms]":>24}')
-for k, nm in enumerate(names):
-    note = f'{Q[k]:24.5f}' if ok[k] else (
-        f'{"dropped: edges merged":>24}' if np.isnan(Q[k]) else
-        f'{Q[k]:15.5f} rejected')
-    print(f'{nm:>7} {note}')
-print(f'  mean {Q_MEAN:.5f} ms over {ok.sum()} gauges, '
-      f'spread {np.ptp(Q[ok])*1e3:.3f} us ({np.ptp(Q[ok])/Q_MEAN:.1e})')
-print(f'\nc0 = 2 L_free_ref / Q : {c0_id:.3f} mm/ms')
-if EXPERIMENT:
-    print(f'c0 {_ref_lbl}               : —   (no ground truth for a '
-          'measured shot)')
+c0_direct = {}
+for i, (bar, off, cnt) in enumerate(
+        (('in', 0, n_in), ('out', n_in, len(names) - n_in)), start=1):
+    if cnt < 2:
+        continue
+    dt_d = abs(arrival[off + 1] - arrival[off])
+    D_tape = abs(true_pos[off + 1] - true_pos[off])
+    c0_direct[bar] = D_tape / dt_d
+    print(f'{f"({i}) direct arrival, {bar}-0->{bar}-1":>34} {D_tape:10.2f} '
+          f'{arrival[off]:9.4f} {arrival[off + 1]:9.4f} '
+          f'{dt_d*1e3:9.4f} {c0_direct[bar]:10.3f}')
+
+c0_echo_out = {}
+if len(names) - n_in >= 2:
+    for i, (k, nm) in enumerate(((_OUT0, 'out-0'), (_OUT1, 'out-1')), start=3):
+        lbl = f'({i}) {nm} free-end echo'
+        if np.isnan(tau[k]):
+            print(f'{lbl:>34} {"-- edges merged, not usable --":>48}')
+            continue
+        L_free_tape_k = L_OUTPUT - true_pos[k]
+        t_echo = arrival[k] + tau[k]
+        c0v = 2.0 * L_free_tape_k / tau[k]
+        c0_echo_out[nm] = c0v
+        print(f'{lbl:>34} {2.0*L_free_tape_k:10.2f} {arrival[k]:9.4f} '
+              f'{t_echo:9.4f} {tau[k]*1e3:9.4f} {c0v:10.3f}')
+
+# --------------------------------------------------------------------------
+# c0 -- FINAL, picked by [.use_only_out_for_c0]
+# --------------------------------------------------------------------------
+if USE_ONLY_OUT_FOR_C0:
+    # The output-bar-only route: average of ONLY the two out-bar echoes
+    # (rows 3-4 above). Cleanest available measurement when both echoes are
+    # known to agree -- but only two numbers, so nothing here catches ONE of
+    # them being mis-detected; that failure mode is why this is opt-in, not
+    # the default (see calibration_tension, which hits it).
+    if len(c0_echo_out) < 2:
+        raise SystemExit(
+            'use_only_out_for_c0 is set but both out-0 and out-1 free-end '
+            'echoes are needed to set c0 -- see the table above for which '
+            'one is not usable')
+    c0_id = float(np.mean(list(c0_echo_out.values())))
+    _out_spread = abs(c0_echo_out['out-0'] - c0_echo_out['out-1'])
+    print(f'\nc0 (FINAL, use_only_out_for_c0=true) = mean(out-0, out-1 echo) '
+          f'= {c0_id:.3f} mm/ms')
+    print(f'  out-0 vs out-1 echo spread : {_out_spread:.3f} mm/ms '
+          f'({_out_spread / c0_id:.2e} relative)')
+    if not EXPERIMENT:
+        print(f'  c0 true                    : {d["c0_in"]:.3f} mm/ms   '
+              f'rel err {(c0_id/d["c0_in"]-1):+.2e}')
 else:
-    print(f'c0 true               : {d["c0_in"]:.3f} mm/ms   '
-          f'rel err {(c0_id/d["c0_in"]-1):+.2e}')
-print(f'tape contributes      : +-{L_FREE_REF_TOL/L_FREE_REF:.1e} '
-      f'(+-{c0_id*L_FREE_REF_TOL/L_FREE_REF:.2f} mm/ms), which dominates '
-      f'everything else')
+    # The classic route: Q = tau + 2 lag is the same at every gauge, so
+    # L_free_ref anchors c0 = 2 L_free_ref / Q averaged over however many of
+    # the up to 4 gauges pass the 1 % outlier check above (see "Q" -- this
+    # crosses the threaded joint twice from whichever gauge is REF, but is
+    # robust to any ONE gauge's echo being bad, unlike the output-bar-only
+    # route above).
+    print(f'\n--- c0, via L_free_ref through the joint '
+          f'(use_only_out_for_c0=false) -------')
+    print(f'L_free_ref ({names[REF]} -> free end) : {L_FREE_REF:.1f} '
+          f'+- {L_FREE_REF_TOL:.1f} mm')
+    print(f'{"gauge":>7} {"Q = 2 L_free_ref/c0 [ms]":>24}')
+    for k, nm in enumerate(names):
+        note = f'{Q[k]:24.5f}' if ok[k] else (
+            f'{"dropped: edges merged":>24}' if np.isnan(Q[k]) else
+            f'{Q[k]:15.5f} rejected')
+        print(f'{nm:>7} {note}')
+    print(f'  mean {Q_MEAN:.5f} ms over {ok.sum()} gauges, '
+          f'spread {np.ptp(Q[ok])*1e3:.3f} us ({np.ptp(Q[ok])/Q_MEAN:.1e})')
+    c0_id = 2.0 * L_FREE_REF / Q_MEAN
+    print(f'\nc0 (FINAL, use_only_out_for_c0=false) = 2 L_free_ref / Q '
+          f'= {c0_id:.3f} mm/ms')
+    if not EXPERIMENT:
+        print(f'  c0 true                    : {d["c0_in"]:.3f} mm/ms   '
+              f'rel err {(c0_id/d["c0_in"]-1):+.2e}')
+    print(f'  tape contributes           : +-{L_FREE_REF_TOL/L_FREE_REF:.1e} '
+          f'(+-{c0_id*L_FREE_REF_TOL/L_FREE_REF:.2f} mm/ms)')
 
 # --------------------------------------------------------------------------
 # positions -- from the lags, so every gauge gets one, merged edges or not
@@ -600,29 +686,27 @@ for bar, off, cnt in (('in', 0, n_in), ('out', n_in, len(names) - n_in)):
           f'{D_used-D_true:+9.3f}{note}')
 
 # The errors in the "error" columns are what the TIMING costs, with L_free_ref
-# taken as exact. The tape error is separate and adds on top -- but NOT
-# uniformly, and the distinction matters:
-#
-#   c0, D, L_free   scale with L_free_ref, so they carry a RELATIVE band. D is
-#                   the one the reduction actually leans on, and the ratio
-#                   L_free_ref/D is the leverage that makes it small.
-#   x (positions)   are L_free plus a constant, so they carry an ABSOLUTE band
-#                   of order the tape error itself -- ~10x worse in relative
-#                   terms, and NOT improved by the leverage. It is benign
-#                   anyway, because a common offset mostly shifts where the wave
-#                   is reconstructed rather than distorting it, but it is not
-#                   the +-_f the older version of this message implied.
-_f = L_FREE_REF_TOL / L_FREE_REF
-_D = c0_id * abs(lag[1] - lag[0])
-print(f'\nwith a tape good to +-{L_FREE_REF_TOL:.1f} mm on the '
+# taken as exact. The tape error on L_free_ref is separate and adds on top.
+# D = L_free_1 - L_free_0 and L_FREE_REF cancels out of that difference
+# regardless of which c0 route was used, so D never carries it. c0 itself
+# only escapes it under use_only_out_for_c0 -- otherwise c0 = 2 L_free_ref/Q
+# is directly proportional to L_free_ref. Only the ABSOLUTE positions always
+# carry it, through the L_FREE_REF additive constant in
+# L_free_k = L_FREE_REF - c0 * lag_k -- a tape error there shifts every
+# position by close to the same amount, benign for the same reason as
+# always: a common offset mostly moves where the wave is reconstructed rather
+# than distorting it.
+_c0_tape = ('unaffected -- does not depend on L_free_ref under '
+           'use_only_out_for_c0' if USE_ONLY_OUT_FOR_C0 else
+           f'+-{L_FREE_REF_TOL/L_FREE_REF:.1e} relative '
+           f'(+-{c0_id*L_FREE_REF_TOL/L_FREE_REF:.2f} mm/ms)')
+print(f'\nwith a tape (L_free_ref) good to +-{L_FREE_REF_TOL:.1f} mm on the '
       f'{L_FREE_REF:.0f} mm reference baseline:\n'
-      f'  c0, D, L_free  +-{_f:.1e} relative: +-{c0_id*_f:.1f} mm/ms on c0, '
-      f'+-{_D*_f:.2f} mm on D\n'
-      f'  positions      +-{L_free_band.min():.2f} to '
-      f'+-{L_free_band.max():.2f} mm ABSOLUTE (the +-tape column above)\n'
-      f'The leverage on D is the ratio L_free_ref/D = {L_FREE_REF/_D:.1f}: a '
-      f'sloppy measurement on a long\nbaseline buys a sharp one on a short '
-      f'baseline. It does not help the positions.')
+      f'  c0             : {_c0_tape}\n'
+      f'  D              : unaffected -- L_free_ref cancels out of any '
+      'D = L_free_i - L_free_j\n'
+      f'  positions      : +-{L_free_band.min():.2f} to '
+      f'+-{L_free_band.max():.2f} mm ABSOLUTE (the +-tape column above)')
 
 # --------------------------------------------------------------------------
 # the symmetry that was NOT assumed, measured instead

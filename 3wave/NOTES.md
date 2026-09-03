@@ -244,6 +244,33 @@ repeated here; this file is only for what those do not record.
     inherits the same guard. Worth remembering for any future rig where a
     gauge pair's `x`-order and arrival-order can disagree.
 
+11. **`calibration_tension`'s `out-0` free-end echo is mis-detected, and it
+    only surfaced once c0 stopped being averaged over 4 gauges.** Chasing
+    whether c0 could be measured from the output bar alone -- entirely
+    coupler-free, unlike `2 L_free_ref / Q`, which crosses the threaded joint
+    twice from an in-bar reference -- `identify_bar_tension.py` grew a
+    diagnostic table of four independent, joint-free routes: direct-arrival
+    lag on each bar's own two gauges, plus each out-bar gauge's own
+    free-end echo. On `experiment_tension_bar_2` all four agree closely
+    (`out-0`/`out-1` echo to 9.6e-4 relative), so averaging just those two
+    echoes is a clean, better-than-`Q` measurement there. Tried as the new
+    default, it broke `calibration_tension` (the simulated self-check): that
+    shot's `out-0` echo search locks onto some OTHER reflection (reports
+    `c0 = 1583` mm/ms against a true `5051`), which the classic `Q`-average
+    had silently absorbed all along -- `out-0` was already being rejected
+    there as a 1 %-outlier among 4 gauges, invisible until only 2 numbers
+    were left to average and one of them was the bad one. With no
+    redundancy, that bad echo alone set `c0`, which then put a gauge at a
+    negative position and crashed `separate()` (`x > 0` required). **Fix:
+    opt-in, not default.** `[<case>.use_only_out_for_c0]` in config.toml
+    (`identify_bar_tension.py`, the "c0 -- FINAL" section) picks the route;
+    `false` (default) keeps the old `Q`-average with its outlier rejection,
+    `true` switches to the two-echo average and is set for
+    `experiment_tension_bar_2` only, where both echoes are confirmed to
+    agree. Never default this to `true` for a case whose two out-bar echoes
+    have not been checked against each other first -- there is no rejection
+    mechanism protecting it.
+
 ## Traps worth not rediscovering
 
 - **The boundary conditions cannot pin `alpha`, only demand it.** Fitting

@@ -626,6 +626,14 @@ L_free_ref = 3730.0                # in-0 (force_in1) -> output bar's far free e
 L_free_ref_gauge = "in-0"
 L_free_ref_tol = 5.0               # what the tape is good to [mm]
 
+# c0 from the output bar's own two free-end echoes alone, bypassing
+# L_free_ref/Q entirely: out-0 and out-1 agree to 9.6e-4 relative here, and
+# this route never crosses the threaded joint (see identify_bar_tension.py's
+# "c0 -- FINAL" section). NOT the default -- only two numbers to average, so
+# nothing catches one of them being mis-detected, which is exactly what
+# happens on calibration_tension's out-0. Confirmed safe here first.
+use_only_out_for_c0 = true
+
 [experiment_tension_bar_2.position_override]
 # in-1 identifies at 138.01 mm from the arrival-lag route, ~18 mm off tape
 # (120 mm) and outside its own +-3.94 mm tape tolerance -- an order of
