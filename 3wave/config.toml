@@ -620,7 +620,7 @@ tol = 2.5e-3
 loading = "tension"
 file = "data/SHTB_calibration_2026-09-02_2.txt"
 units = "N"
-gauges = [930.0, 120.0, 120.0, 1200.0]
+gauges = [935.00, 119.00, 123.00, 1200.00]
 
 L_free_ref = 3730.0                # in-0 (force_in1) -> output bar's far free end
 L_free_ref_gauge = "in-0"
@@ -663,7 +663,11 @@ length = 23.0
 
 [experiment_tension_bar_2.trim]
 threshold = 0.05
-lead = 50.0
+lead = 500.0                      # widened from 50 -- separate_time_domain()
+                                  # needs 2*tau of quiescent lead-in before the
+                                  # first arrival (322.5 us in-bar, 429.5 us
+                                  # out-bar); the raw file has ~1 ms of
+                                  # pre-trigger to spare.
 baseline = true
 
 [experiment_tension_bar_2.attenuation]
