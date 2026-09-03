@@ -832,6 +832,15 @@ if EXPERIMENT and 'attenuation' in cfg:
 # one validation that survives contact with a real rig, where there is no truth
 # to compare c0 or the positions against.
 #
+# ONLY the output bar's own two gauges go into this, same restriction as c0
+# and alpha(f)/c_p(f) above and for the same reason: reaching the free
+# surface from an in-bar gauge means crossing the threaded joint, whose
+# impedance is not the bar's. It is also the only physically sound choice --
+# the assembly has a reflector at each end, but only the output bar's far end
+# is a genuine free surface; the anvil end behind the in bar is a lumped mass,
+# not a clean reflector (see the module docstring), so there is no equivalent
+# null test to run on that side at all.
+#
 # It also responds to a mismatched coupler, which the Q spread provably cannot:
 # the coupler's extra transit time enters Q identically at every gauge and
 # cancels out of the spread, but it does not cancel here. Do not oversell that:
@@ -868,45 +877,59 @@ _hi_null = int(np.min(HI)) if EXPERIMENT else N
 t_null = t[:_hi_null]
 sig_null = [s[:_hi_null] for s in signals]
 
-p_free, m_free = separate(t_null, sig_null, L_free, c0=c0_id, eta=d['eta'])
-_total = p_free + m_free
-_amp = np.abs(p_free).max()
-
-# The tail MUST be cut. The exponential window that regularises separate()
-# amplifies the truncation at the end of the record, and over the FULL record
-# the residual comes out ~100x larger than it really is -- 1.2e-01 against
-# 1.2e-03 on a calibration that is in fact good. Start at the first arrival at
-# the free end; stop before the truncation (and, for a measured shot, before
-# whichever comes first: that truncation or the clipped tail).
-_i0 = int(np.argmax(np.abs(p_free) > 0.02 * _amp))
-_i1 = min(int(NULL_WINDOW * N), len(t_null))
-_w = slice(_i0, _i1)
+_NULL_OFF, _NULL_CNT = n_in, len(names) - n_in
 
 print('\n--- free-end null test (no ground truth used) '
       '-----------------------------')
-if _i1 <= _i0:
+if _NULL_CNT < 2:
     null_rms = null_max = float('nan')
-    print('cannot be evaluated: once the clipped tail is excluded, the window '
-          'clear of\nboth the record start and the truncation collapses to '
-          'nothing at every gauge\nat once. This record does not reach the '
-          'free surface in clean form.')
+    print('cannot be evaluated: the output bar has fewer than 2 gauges -- '
+          'this test only\never uses those (see the section comment above), '
+          'and there is no substitute.')
 else:
-    null_rms = float(np.sqrt(np.mean(_total[_w] ** 2)) / _amp)
-    null_max = float(np.abs(_total[_w]).max() / _amp)
-    print(f'reconstructed at the free surface from all {len(names)} gauges, '
-          f'{t_null[_i0]:.2f}-{t_null[_i1-1]:.2f} ms'
-          + (f' (record truncated to {t_null[-1]:.2f} ms, clear of the '
-             'clipped tail)' if EXPERIMENT and _hi_null < N else ''))
-    print(f'peak |eps+|            : {_amp*SCALE:.1f} {USYM}')
-    print(f'residual |eps+ + eps-| : rms {null_rms:.2e}, max {null_max:.2e} '
-          '(relative to peak |eps+|)')
-    print(f'threshold              : {NULL_TOL:.1e}   ->  '
-          f'{"PASS" if null_rms <= NULL_TOL else "FAIL"}')
-    if null_rms > NULL_TOL:
-        print('  The free surface does not come out stress-free, so the '
-              'transit\n  times L_free/c0 are wrong. Most likely: a coupler '
-              'that is not\n  bar material, or the wrong coupler length. Note '
-              'L_free_ref is\n  NOT the suspect -- this test is blind to it.')
+    sig_out_null = sig_null[_NULL_OFF:_NULL_OFF + _NULL_CNT]
+    L_free_out = L_free[_NULL_OFF:_NULL_OFF + _NULL_CNT]
+    p_free, m_free = separate(t_null, sig_out_null, L_free_out, c0=c0_id,
+                              eta=d['eta'])
+    _total = p_free + m_free
+    _amp = np.abs(p_free).max()
+
+    # The tail MUST be cut. The exponential window that regularises separate()
+    # amplifies the truncation at the end of the record, and over the FULL
+    # record the residual comes out ~100x larger than it really is -- 1.2e-01
+    # against 1.2e-03 on a calibration that is in fact good. Start at the
+    # first arrival at the free end; stop before the truncation (and, for a
+    # measured shot, before whichever comes first: that truncation or the
+    # clipped tail).
+    _i0 = int(np.argmax(np.abs(p_free) > 0.02 * _amp))
+    _i1 = min(int(NULL_WINDOW * N), len(t_null))
+    _w = slice(_i0, _i1)
+
+    if _i1 <= _i0:
+        null_rms = null_max = float('nan')
+        print('cannot be evaluated: once the clipped tail is excluded, the '
+              'window clear of\nboth the record start and the truncation '
+              'collapses to nothing at both output\ngauges at once. This '
+              'record does not reach the free surface in clean form.')
+    else:
+        null_rms = float(np.sqrt(np.mean(_total[_w] ** 2)) / _amp)
+        null_max = float(np.abs(_total[_w]).max() / _amp)
+        print(f'reconstructed at the free surface from the output bar\'s '
+              f'{_NULL_CNT} gauges alone, {t_null[_i0]:.2f}-'
+              f'{t_null[_i1-1]:.2f} ms'
+              + (f' (record truncated to {t_null[-1]:.2f} ms, clear of the '
+                 'clipped tail)' if EXPERIMENT and _hi_null < N else ''))
+        print(f'peak |eps+|            : {_amp*SCALE:.1f} {USYM}')
+        print(f'residual |eps+ + eps-| : rms {null_rms:.2e}, max '
+              f'{null_max:.2e} (relative to peak |eps+|)')
+        print(f'threshold              : {NULL_TOL:.1e}   ->  '
+              f'{"PASS" if null_rms <= NULL_TOL else "FAIL"}')
+        if null_rms > NULL_TOL:
+            print('  The free surface does not come out stress-free, so the '
+                  'transit\n  times L_free/c0 are wrong. Most likely: a '
+                  'coupler that is not\n  bar material, or the wrong coupler '
+                  'length. Note L_free_ref is\n  NOT the suspect -- this '
+                  'test is blind to it.')
 
 # --------------------------------------------------------------------------
 # density: NOT identifiable from the records; closed with the bar's mass
@@ -993,14 +1016,21 @@ SURFACE = '#fcfcfb'
 # One column per bar -- in, out -- three rows each: what was measured, its
 # derivative (the edges everything above is actually timed on), and F = P+M
 # reconstructed from THAT bar's own two gauges alone, at ITS OWN interface.
-# All three rows share `t_null` (see above: the record truncated before the
-# earliest clip onset, for a measured shot) so a clipped tail cannot leak into
-# the reconstruction the same way it cannot leak into the free-end null.
+# A fourth row adds the free-end null test's own reconstruction (stress at
+# the free surface, which should sit at zero) -- but only in the OUTPUT
+# bar's column, since that test only ever uses the output bar's gauges (see
+# its section comment above): the in bar's far end is the anvil, not a free
+# surface, so there is no equivalent panel for it, and that row is left
+# blank there. All rows share `t_null` (see above: the record truncated
+# before the earliest clip onset, for a measured shot) so a clipped tail
+# cannot leak into the reconstruction the same way it cannot leak into the
+# free-end null.
 COLS = [(b, off, cnt) for b, off, cnt in
         (('in', 0, n_in), ('out', n_in, len(names) - n_in)) if cnt >= 2]
-fig, axes = plt.subplots(3, len(COLS), figsize=(9.5 * len(COLS), 12),
+fig, axes = plt.subplots(4, len(COLS), figsize=(9.5 * len(COLS), 15.5),
                          sharex=True, squeeze=False)
 fig.patch.set_facecolor(SURFACE)
+_blank_axes = set()
 
 for col, (bar, off, cnt) in enumerate(COLS):
     idx = slice(off, off + cnt)
@@ -1084,9 +1114,39 @@ for col, (bar, off, cnt) in enumerate(COLS):
                   loc='left', fontsize=10)
     ax2.legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
 
+    # Fourth row: the free-end null test's own reconstruction -- stress AT
+    # the free surface, which the boundary condition demands sit at zero.
+    # Only the output bar has one (see the section comment above); the input
+    # bar's column gets a blank row instead, styled off in the loop below.
+    ax3 = axes[3, col]
+    if bar == 'out':
+        ax3.plot(t_null, p_free * SCALE, lw=.9, color=BLUE, label='$P$')
+        ax3.plot(t_null, m_free * SCALE, lw=.9, color=ORANGE, label='$M$')
+        ax3.plot(t_null, _total * SCALE, color=INK, lw=1.1,
+                 label='$P + M$ (should be 0)')
+        ax3.axhline(0, color=GRID, lw=1.0)
+        if _i1 > _i0:
+            ax3.axvspan(t_null[_i0], t_null[_i1 - 1], color=GRID, alpha=.35,
+                       label='rms/max window')
+        verdict = ('not evaluable' if np.isnan(null_rms) else
+                  ('PASS' if null_rms <= NULL_TOL else 'FAIL'))
+        _rms_txt = '--' if np.isnan(null_rms) else f'{null_rms:.2e}'
+        ax3.set_xlabel('Time (ms)')
+        ax3.set_ylabel(f'Stress at free end ({USYM})')
+        ax3.set_title(f'Free-end null: stress at the output bar\'s free '
+                      f'surface -- rms {_rms_txt} vs tol {NULL_TOL:.1e} -> '
+                      f'{verdict}', loc='left', fontsize=10)
+        ax3.legend(frameon=False, fontsize=9, labelcolor=MUTED,
+                  loc='lower left')
+    else:
+        _blank_axes.add(ax3)
+
 axes[0, 0].set_xlim(0, t_null[-1])
 
 for ax in axes.flat:
+    if ax in _blank_axes:
+        ax.axis('off')
+        continue
     ax.set_facecolor(SURFACE); ax.grid(True, color=GRID, lw=.7, alpha=.8)
     ax.set_axisbelow(True)
     for sp in ('top', 'right'): ax.spines[sp].set_visible(False)
