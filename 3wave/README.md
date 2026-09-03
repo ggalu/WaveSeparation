@@ -874,9 +874,9 @@ No amount of timing breaks that. **The experiment fixes every length only up to
 one overall scale**, so exactly one measured length has to be supplied. There is
 no way around this and no cleverness that avoids it.
 
-The script asks for the least painful one: the distance from a single gauge — the
-one the wave reaches first, hence the one furthest from the free end — to the far
-free end. Call it `L_free_ref`. Everything else is leverage:
+The script asks for the least painful one by default: the distance from a single
+gauge — the one the wave reaches first, hence the one furthest from the free
+end — to the far free end. Call it `L_free_ref`. Everything else is leverage:
 
 ```math
 \frac{\delta c_0}{c_0} \;=\; \frac{\delta D}{D}
@@ -892,6 +892,62 @@ Nothing assumes the two bars are instrumented symmetrically. The script
 **measures** the asymmetry of each nominal pair instead and reports it; on the
 shipped layout it recovers the true −1.000 mm (a mesh-rounding artefact, not a
 real offset) to within 0.28 mm, so it would catch a real mismatch.
+
+### Which length you import: `c0_route`
+
+*Which* length carries the scale is a choice, and `[<case>.c0_route]` makes it
+explicit. Importing **two** is the mistake worth naming: they do not cancel, and
+the identification then reports their disagreement as if it were an error of its
+own.
+
+| `c0_route` | `c0` from | positions from | imports |
+|---|---|---|---|
+| `"joint"` *(default)* | `2·L_free_ref / mean(Q)` | `L_free_k = L_free_ref − c0·lag_k` | `L_free_ref` only |
+| `"out_echo"` | `mean 2(L_output − x_tape,k)/tau_k` | `L_free_ref` | **two anchors — do not use** |
+| `"out_echo_diff"` | `2·D_out / (tau_out0 − tau_out1)` | `L_free_k = c0·tau_k / 2` | the out-bar gauge **spacing** |
+
+`"joint"` averages over every gauge that survives the 1 % `Q` outlier check, so
+one bad echo cannot set `c0` by itself — it is the route that degrades
+gracefully, and it stays the default for that reason. Its weakness is that it
+reaches the free end from an in-bar gauge, crossing the threaded joint twice, so
+whatever the coupler costs in transit time is absorbed into `c0`.
+
+`"out_echo_diff"` differences the two out-bar round trips. `L_output` cancels
+against the free end and `L_free_ref` never enters, so the only tape number left
+in it is the spacing between the two out-bar gauges. Every `L_free` then comes
+from that gauge's own echo, which means the out-bar positions come back at their
+own tape as a **check** instead of by construction. On `experiment_tension_bar_2`:
+
+| | identified | config | slip |
+|---|---|---|---|
+| `c0` | 5126.3 mm/ms | — | — |
+| `L_output` | 2780.75 mm | 2777.0 | +3.75 |
+| `L_free_ref` (`in-0`) | 3803.02 mm | 3730.0 | **+73.02** |
+| joint, acoustic | 91.02 mm | 23.0 | **+68.02** |
+
+Both out gauges land 3.7 mm from their tape, and *identically* — which is a
+statement about `L_output`, not about the gauges. The last row is what the
+single anchor buys you: the joint is **91 mm of acoustic length against a 23 mm
+tape**, +13.3 µs on every in-bar-referred number. Under the other two routes
+that excess is not visible; it is smeared over the in-bar positions instead, and
+it is why `"joint"` puts `in-1` at 138 mm against a 119 mm tape.
+
+Because of it the in bar is a second acoustic leg. The timings cannot split the
+joint's delay from the in-bar gauges' own offsets, so **one in-bar tape position
+is imported too** (the reference gauge's) and the excess is reported as
+`L_joint_eff`. That row is flagged in the output as an anchor rather than a
+measurement — the in-bar *spacing* is independent of the choice, the in-bar
+*positions* are not.
+
+The price of the single anchor is leverage: `D_out` is a 1077 mm baseline where
+`L_free_ref` was 3730, so `c0` inherits ±2.6e-3 from ±2 mm gauge tape
+(`gauge_tol`) rather than ±1.3e-3. That is a poor trade only if you believe the
+two anchors agreed — here they were 68 mm apart.
+
+Like `"out_echo"`, it needs **both** out-bar echoes and has no redundancy if one
+is mis-detected — the failure that broke `calibration_tension` (NOTES.md, open
+thread 11). Check rows (3) and (4) of the printed `c0` table against each other
+before selecting it.
 
 The trade is better still because of what the reduction consumes. In `separate`
 the positions enter only as $\xi x_k = (\omega - i\eta)x_k/c_0$ — that ξ is the
@@ -1038,8 +1094,19 @@ Hand `separate` the identified `L_free` — distances *from that surface* — an
 boundary condition becomes a residual that should vanish. It consumes nothing but
 the record and the identified numbers, which makes it the only validation in the
 script that survives contact with a real bar. It runs automatically and prints a
-PASS/FAIL, and the bottom two panels of `bar_identification_tension.png` show it:
-`ε₊` and `ε₋` as mirror images, then their sum against the threshold band.
+PASS/FAIL, and the bottom-right panel of `bar_identification_tension.png` shows
+it: `ε₊` and `ε₋` as mirror images, then their sum against the threshold band.
+
+The bottom-**left** panel is the check the input bar can carry instead — its far
+end is the anvil, not a free surface, so there is no null test for it. Force is
+continuous across a rigid coupler, so `F_in` (reconstructed at the input-bar
+face from the input bar's two gauges) and `F_out` (at the output-bar face, from
+the output bar's) are two **independent** solves of one quantity, sharing only
+`c0`. Where they part company is the honest error bar on the whole
+identification: `mean |F_in − F_out| / max|F_in|` = 2.83e-02 on
+`experiment_tension_bar_2`. The two curves are one coupler apart and neither is
+shifted — see `L_joint_eff` above, and NOTES.md thread 11 for why a plain time
+shift does not reconcile them.
 
 | `L_free`, `c0` from | rms residual |
 |---|---|
@@ -1832,7 +1899,7 @@ specimen reduction, which is what the floor is actually made of.
 | `identify_attenuation.py` | `α(f)` and `c_p(f)` from two gauges on the same bar, by the transfer function between them. Magnitudes only — no boundary condition — so the free-end null stays an independent check of it. A module; `identify_bar_compression.py` and `reconstruct_interface.py` both use it. |
 | `plot_gauges_at_interface.py` | Each gauge shifted to `x = 0` alone (`backpropagate`) against the two-gauge separation, with each gauge's single-wave window `2(L-d)/c0`. Shows how much of a record needed two gauges, and what one gauge would have claimed past that. |
 | `reconstruct_interface.py` | **The deliverable for a real shot:** force at the impact interface, `F = P + M`, plus the four checks — free-end null, causality, unilateral contact, separation. Runs the identified and tape positions side by side. `--no-attenuation` for the lossless comparison. |
-| `identify_bar_tension.py` | Recovers gauge positions, spacing `D` and `c0` from that shot's echo train. Never reads the configured gauge list. Needs one measured length: `L_free_ref` in `config.toml`, or `--l-free-ref`. |
+| `identify_bar_tension.py` | Recovers gauge positions, spacing `D` and `c0` from that shot's echo train. Needs one measured length, and `c0_route` picks which: `L_free_ref` in `config.toml` (or `--l-free-ref`) by default, the out-bar gauge spacing under `"out_echo_diff"` — that route reads two entries of the configured gauge list and nothing else from it. |
 | `reduce_specimen.py` | Full chain: gauges → specimen stress/strain, validated against the simulator's own measurement. `--headless` to skip the window. |
 | `lagrange_diagram.py` | The separated waves as x-t FIELDS across the whole assembly, from the ordinary dump. Prints the gauge round trip, the free-surface null and the interface force as numbers. |
 | `plot_forces.py` | Raw gauge forces vs average specimen force. Shows when wave overlap begins. |

@@ -271,6 +271,48 @@ repeated here; this file is only for what those do not record.
     have not been checked against each other first -- there is no rejection
     mechanism protecting it.
 
+    **Addendum, 2026-09-03: that route mixed two anchors, and the key is now
+    `[<case>.c0_route]`.** `use_only_out_for_c0 = true` anchored `c0` on the
+    out-bar TAPE POSITIONS (`c0 = 2 (L_output - x_tape_k)/tau_k`) and then
+    placed every gauge from `L_free_ref` instead. Two imported lengths where
+    the physics admits one, and on `experiment_tension_bar_2` they disagree:
+    the out gauges came back **58.3 and 69.2 mm** from the same tape that had
+    just set `c0`. That gap was read as an identification error for a while.
+    It is not -- it is the two tape statements contradicting each other, and
+    the timings are the referee: `Q` is consistent to 3.4e-3 across all four
+    gauges.
+
+    `c0_route = "out_echo_diff"` is the fix and is what
+    `experiment_tension_bar_2` now uses. `c0 = 2 D_out/(tau_out0 - tau_out1)`,
+    the two out-bar round trips DIFFERENCED, so `L_output` cancels with the
+    free end and the only imported number is the out-bar gauge SPACING
+    (1077 mm). Every distance then comes from that gauge's own round trip,
+    `L_free_k = c0 tau_k / 2` -- one anchor, so the out-bar positions come
+    back at their own tape as a check rather than by construction. Measured:
+    `c0 = 5126.3 mm/ms`, both out gauges at **-3.7 mm** (identically, i.e.
+    `L_output` is 2780.7 and not the configured 2777), `L_free_ref` implied
+    3803.0 against a taped 3730.
+
+    What that exposes is the **joint**: 91.0 mm of acoustic length against a
+    23 mm tape, +13.3 us of excess transit on every in-bar-referred number.
+    The timings cannot split that delay from the in-bar gauges' own offsets,
+    so the in bar is a second acoustic leg needing one imported length of its
+    own -- the reference gauge's tape position -- and the excess is reported
+    as `L_joint_eff` rather than smeared over the in-bar positions. Smearing
+    it is what put `in-1` at 138 mm against a 119 mm tape under `"joint"`;
+    under `"out_echo_diff"` it identifies at 129.3, and the residual ~10 mm
+    is the thread-10 anomaly alone, no longer stacked on top of the joint.
+
+    Not yet closed by any of this: the free-end null still FAILs. It reads
+    2.54e-2 under the new route, 2.11e-2 under `"joint"`, 6.26e-2 under the
+    old mixed anchor, and scaling the out-bar `L_free/c0` pair by +-2 % about
+    the new values only makes it worse -- so ~2e-2 is a floor that anchoring
+    cannot reach, against a 2.5e-3 tolerance. The other visible symptom of
+    the same thing: rows (2) and (5) of the `c0` table measure the same
+    1077 mm over different paths and disagree by 1.2 % (5065.5 vs 5126.3),
+    i.e. 2.5 us of edge timing. That is the edge changing shape as it
+    propagates -- dispersion, thread 10 -- not geometry.
+
 ## Traps worth not rediscovering
 
 - **The boundary conditions cannot pin `alpha`, only demand it.** Fitting

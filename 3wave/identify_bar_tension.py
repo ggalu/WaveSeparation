@@ -51,6 +51,54 @@ separation theory, which is a different quantity with different units and lives
 in wave_separation.py. The two used to share the name xi here, which is why the
 next paragraph but one spells the distinction out.
 
+--------------------------------------------------------------------------
+Which tape number carries the scale: [.c0_route]
+--------------------------------------------------------------------------
+ONE length must be imported; WHICH one is a choice, and c0_route in
+config.toml makes it explicit rather than implicit:
+
+  "joint"          (default) c0 = 2 L_free_ref / mean(Q), and every position
+                   from L_free_k = L_free_ref - c0 lag_k. Consumes ONLY
+                   L_free_ref and the timings -- the configured gauge list is
+                   never read. Averages over every gauge that passes the 1 %
+                   outlier check, so any ONE bad echo is rejected. Its
+                   weakness is that it reaches the free end from an in-bar
+                   reference, crossing the threaded joint twice: whatever the
+                   coupler costs in transit time is absorbed into c0.
+
+  "out_echo"       c0 = mean of the two out-bar gauges' own free-end echoes,
+                   2 (L_output - x_tape_k) / tau_k. Never crosses the joint --
+                   but it READS THE OUT-BAR TAPE POSITIONS, the very quantities
+                   this script reports as identified, and then places every
+                   gauge from a DIFFERENT anchor, L_free_ref. Two anchors that
+                   disagree do not cancel: on experiment_tension_bar_2 they
+                   disagree by 68 mm, and the out gauges come back 58 and 69 mm
+                   away from the same tape that set c0. Kept so the older
+                   results stay reproducible. Do not choose it.
+
+  "out_echo_diff"  c0 = 2 D_out / (tau_out0 - tau_out1), from the DIFFERENCE of
+                   the two out-bar round trips, and every L_free from that
+                   gauge's own round trip, L_free_k = c0 tau_k / 2. The one
+                   tape number it consumes is the out-bar gauge SPACING: no
+                   L_output, no L_free_ref, no joint length. Exactly ONE anchor,
+                   so the out-bar positions come back at their own tape as a
+                   real check rather than by construction -- both at -3.7 mm
+                   here, which says L_output is 2780.7 mm and not the
+                   configured 2777.
+
+                   Same exposure as "out_echo" in one respect: it needs both
+                   out-bar echoes and has no redundancy if one is mis-detected.
+                   Check rows (3) and (4) of the c0 table against each other
+                   before selecting it.
+
+Under "out_echo_diff" the in bar is a separate acoustic leg, because the
+joint's ACOUSTIC length is not its tape length -- 91.0 mm against 23.0 mm here,
+13.3 us of excess transit. The timings cannot split that delay from the in-bar
+gauges' own offsets, so one in-bar tape position anchors that leg and the
+excess is reported as L_joint_eff instead of being smeared over every in-bar
+position. The other two routes smear it: it is why "joint" puts in-1 at 138 mm
+against a 119 mm tape.
+
 Everything else is then leverage:
 
     d(c0)/c0 = d(D)/D = d(L_free_ref)/L_free_ref
@@ -207,16 +255,33 @@ L_FREE_REF_GAUGE = cfg.get('L_free_ref_gauge')   # None = "whichever is ref"
 L_FREE_REF_TOL = (ARGS.L_free_ref_tol if ARGS.L_free_ref_tol is not None
                   else cfg.get('L_free_ref_tol', 2.0))    # [mm]
 
-# c0 can come from two places (see the "c0" section below): the classic
-# 2 L_free_ref / Q, averaged over however many of the up-to-4 gauges pass the
-# 1 % outlier check (robust to any ONE gauge's echo being bad, but crosses the
-# threaded joint twice from an in-bar reference); or the output bar's own two
-# free-end echoes alone (never crosses the joint, but has no redundancy if
-# ONE of those two echoes is itself mis-detected -- see NOTES.md/the
-# calibration_tension self-check, where this broke). Default false: the
-# joint-crossing route degrades gracefully and is the safe default; opt a
-# case into the output-bar-only route once its two echoes are known to agree.
-USE_ONLY_OUT_FOR_C0 = bool(cfg.get('use_only_out_for_c0', False))
+# WHICH tape number carries the scale -- see "[.c0_route]" in the docstring
+# above for what each one consumes and what it costs. "joint" is the default
+# because it degrades gracefully: it averages over every gauge that survives
+# the 1 % outlier check, so one bad echo cannot set c0 by itself. Opt a case
+# into "out_echo_diff" once its two out-bar echoes are known to agree.
+C0_ROUTES = ('joint', 'out_echo', 'out_echo_diff')
+C0_ROUTE = cfg.get('c0_route')
+if C0_ROUTE is None:
+    # The boolean this key replaced. It only ever selected "out_echo", which
+    # is the route that mixes two anchors -- map it, but say so, because the
+    # mapping preserves a result that is wrong rather than fixing it.
+    C0_ROUTE = 'out_echo' if cfg.get('use_only_out_for_c0', False) else 'joint'
+    if 'use_only_out_for_c0' in cfg:
+        print(f"[{CASE}] use_only_out_for_c0 is superseded by c0_route; "
+              f"reading it as c0_route = {C0_ROUTE!r}.\n"
+              "  That route anchors c0 on the out-bar tape positions and the "
+              "gauge positions on\n  L_free_ref -- two anchors, which do not "
+              "cancel. 'out_echo_diff' is the fixed one.")
+if C0_ROUTE not in C0_ROUTES:
+    raise SystemExit(f'[{CASE}] c0_route = {C0_ROUTE!r} is not one of '
+                     f'{list(C0_ROUTES)}')
+
+# What ONE tape gauge position is good to [mm]. Only "out_echo_diff" consumes
+# it: the scale it imports is the out-bar SPACING, a difference of two such
+# readings, and the in bar's leg is anchored on a third. The other routes
+# import L_free_ref instead and carry L_free_ref_tol.
+GAUGE_TOL = float(cfg.get('gauge_tol', 2.0))
 
 
 # --------------------------------------------------------------------------
@@ -564,24 +629,71 @@ if len(names) - n_in >= 2:
         print(f'{lbl:>34} {2.0*L_free_tape_k:10.2f} {arrival[k]:9.4f} '
               f'{t_echo:9.4f} {tau[k]*1e3:9.4f} {c0v:10.3f}')
 
+# (5) The two round trips DIFFERENCED. What is left is 2 D_out of travel, so
+# the only tape number in it is the out-bar gauge spacing -- L_output cancels
+# with the free end, and L_free_ref never enters. This is the one row that
+# imports nothing but a length between two gauges 1 m apart, which is why
+# c0_route = "out_echo_diff" is built on it.
+c0_echo_diff = D_OUT_TAPE = None
+if len(names) - n_in >= 2 and not (np.isnan(tau[_OUT0]) or np.isnan(tau[_OUT1])):
+    D_OUT_TAPE = abs(true_pos[_OUT1] - true_pos[_OUT0])
+    _dtau = abs(tau[_OUT0] - tau[_OUT1])
+    c0_echo_diff = 2.0 * D_OUT_TAPE / _dtau
+    print(f'{"(5) out-0 - out-1 echo difference":>34} {2.0*D_OUT_TAPE:10.2f} '
+          f'{tau[_OUT1]:9.4f} {tau[_OUT0]:9.4f} {_dtau*1e3:9.4f} '
+          f'{c0_echo_diff:10.3f}')
+    print('  (5) differences two ROUND TRIPS, so its t1/t2 are those intervals '
+          'and not\n      absolute times. Rows (2) and (5) measure the same '
+          f'{D_OUT_TAPE:.0f} mm over different paths\n      and should agree; '
+          f'they differ by {abs(c0_echo_diff - c0_direct["out"]):.1f} mm/ms '
+          f'({abs(c0_echo_diff/c0_direct["out"] - 1):.1e}) here, which is the '
+          'edge\n      changing shape with distance, not geometry.')
+
 # --------------------------------------------------------------------------
-# c0 -- FINAL, picked by [.use_only_out_for_c0]
+# c0 -- FINAL, picked by [.c0_route]
 # --------------------------------------------------------------------------
-if USE_ONLY_OUT_FOR_C0:
+if C0_ROUTE == 'out_echo_diff':
+    # Row (5): the two round trips differenced. One anchor, the out-bar gauge
+    # spacing, and no other length -- which is the whole point of this route.
+    if c0_echo_diff is None:
+        raise SystemExit(
+            'c0_route = "out_echo_diff" needs BOTH out-bar free-end echoes '
+            '(row 5 of the table above); at least one is not usable here')
+    c0_id = c0_echo_diff
+    print(f'\nc0 (FINAL, c0_route="out_echo_diff") = 2 D_out / (tau_out0 - '
+          f'tau_out1) = {c0_id:.3f} mm/ms')
+    print(f'  anchored on                : the out-bar tape SPACING, '
+          f'{D_OUT_TAPE:.1f} mm -- no L_output, no L_free_ref')
+    _spread = abs(c0_echo_out['out-0'] - c0_echo_out['out-1'])
+    print(f'  cross-check, rows (3)/(4)  : {c0_echo_out["out-0"]:.1f} and '
+          f'{c0_echo_out["out-1"]:.1f} mm/ms, spread {_spread:.3f} '
+          f'({_spread / c0_id:.2e} relative)')
+    print(f'  tape contributes           : +-{np.sqrt(2)*GAUGE_TOL/D_OUT_TAPE:.1e}'
+          f' relative (+-{c0_id*np.sqrt(2)*GAUGE_TOL/D_OUT_TAPE:.1f} mm/ms), '
+          f'from +-{GAUGE_TOL:.1f} mm on each of the two gauge positions')
+    if not EXPERIMENT:
+        print(f'  c0 true                    : {d["c0_in"]:.3f} mm/ms   '
+              f'rel err {(c0_id/d["c0_in"]-1):+.2e}')
+elif C0_ROUTE == 'out_echo':
     # The output-bar-only route: average of ONLY the two out-bar echoes
-    # (rows 3-4 above). Cleanest available measurement when both echoes are
-    # known to agree -- but only two numbers, so nothing here catches ONE of
-    # them being mis-detected; that failure mode is why this is opt-in, not
-    # the default (see calibration_tension, which hits it).
+    # (rows 3-4 above). Superseded, and kept only so older results stay
+    # reproducible: each echo reads a tape gauge POSITION, so c0 lands on a
+    # different anchor from the positions below, and the two do not cancel.
+    # It also has the same lack of redundancy as row (5) -- only two numbers,
+    # so nothing catches ONE of them being mis-detected (see
+    # calibration_tension, which hits exactly that).
     if len(c0_echo_out) < 2:
         raise SystemExit(
-            'use_only_out_for_c0 is set but both out-0 and out-1 free-end '
-            'echoes are needed to set c0 -- see the table above for which '
+            'c0_route = "out_echo" needs both out-0 and out-1 free-end '
+            'echoes to set c0 -- see the table above for which '
             'one is not usable')
     c0_id = float(np.mean(list(c0_echo_out.values())))
     _out_spread = abs(c0_echo_out['out-0'] - c0_echo_out['out-1'])
-    print(f'\nc0 (FINAL, use_only_out_for_c0=true) = mean(out-0, out-1 echo) '
+    print(f'\nc0 (FINAL, c0_route="out_echo") = mean(out-0, out-1 echo) '
           f'= {c0_id:.3f} mm/ms')
+    print('  !! c0 is anchored on the out-bar TAPE POSITIONS here while the '
+          'positions below\n  !! are anchored on L_free_ref. Two anchors. '
+          'Use c0_route = "out_echo_diff".')
     print(f'  out-0 vs out-1 echo spread : {_out_spread:.3f} mm/ms '
           f'({_out_spread / c0_id:.2e} relative)')
     if not EXPERIMENT:
@@ -595,7 +707,7 @@ else:
     # robust to any ONE gauge's echo being bad, unlike the output-bar-only
     # route above).
     print(f'\n--- c0, via L_free_ref through the joint '
-          f'(use_only_out_for_c0=false) -------')
+          f'(c0_route="joint") ---------------')
     print(f'L_free_ref ({names[REF]} -> free end) : {L_FREE_REF:.1f} '
           f'+- {L_FREE_REF_TOL:.1f} mm')
     print(f'{"gauge":>7} {"Q = 2 L_free_ref/c0 [ms]":>24}')
@@ -607,7 +719,7 @@ else:
     print(f'  mean {Q_MEAN:.5f} ms over {ok.sum()} gauges, '
           f'spread {np.ptp(Q[ok])*1e3:.3f} us ({np.ptp(Q[ok])/Q_MEAN:.1e})')
     c0_id = 2.0 * L_FREE_REF / Q_MEAN
-    print(f'\nc0 (FINAL, use_only_out_for_c0=false) = 2 L_free_ref / Q '
+    print(f'\nc0 (FINAL, c0_route="joint") = 2 L_free_ref / Q '
           f'= {c0_id:.3f} mm/ms')
     if not EXPERIMENT:
         print(f'  c0 true                    : {d["c0_in"]:.3f} mm/ms   '
@@ -616,11 +728,70 @@ else:
           f'(+-{c0_id*L_FREE_REF_TOL/L_FREE_REF:.2f} mm/ms)')
 
 # --------------------------------------------------------------------------
-# positions -- from the lags, so every gauge gets one, merged edges or not
+# positions -- every gauge gets one, merged edges or not
 # --------------------------------------------------------------------------
-L_free = L_FREE_REF - c0_id * lag
-id_pos = np.where(np.arange(len(names)) >= n_in,
-                  L_OUTPUT - L_free, L_free - L_OUTPUT - L_JOINT)
+_IS_OUT = np.arange(len(names)) >= n_in
+L_JOINT_EFF = L_OUT_IMPLIED = None
+
+if C0_ROUTE == 'out_echo_diff':
+    # Each gauge's own round trip IS its distance to the free end: tau_k =
+    # 2 L_free_k / c0, nothing else in it. A gauge whose two negative edges
+    # merged has no usable tau, so it falls back to the same quantity built
+    # from the shared Q instead -- L_free_k = c0 (Q/2 - lag_k), which is the
+    # identity Q = tau + 2 lag rearranged, not a second anchor.
+    L_free = np.where(np.isnan(tau), c0_id * (Q_MEAN / 2.0 - lag),
+                      c0_id * tau / 2.0)
+
+    # The OUT bar reaches the free end without crossing anything, so its
+    # positions need only the configured L_output -- and the two gauges then
+    # give the same L_output back independently, which is a real check on it.
+    L_OUT_IMPLIED = float(np.mean([L_free[k] + true_pos[k]
+                                   for k in range(n_in, len(names))]))
+
+    # The IN bar does not. Everything on it reaches the free end THROUGH the
+    # joint, whose acoustic length is not its tape length, and the timings
+    # cannot separate that delay from the in-bar gauges' own offsets: one
+    # in-bar length has to be imported, for exactly the reason one length has
+    # to be imported overall. The reference gauge's tape position is the one
+    # to spend, being the longest in-bar baseline. What comes back is the
+    # joint's EFFECTIVE length, reported rather than smeared.
+    if n_in:
+        _anchor = int(np.argmin(arrival[:n_in]))
+        L_JOINT_EFF = float(L_free[_anchor] - true_pos[_anchor] - L_OUTPUT)
+    L_JOINT_USED = L_JOINT if L_JOINT_EFF is None else L_JOINT_EFF
+    id_pos = np.where(_IS_OUT, L_OUTPUT - L_free,
+                      L_free - L_OUTPUT - L_JOINT_USED)
+else:
+    L_JOINT_USED = L_JOINT
+    L_free = L_FREE_REF - c0_id * lag
+    id_pos = np.where(_IS_OUT, L_OUTPUT - L_free, L_free - L_OUTPUT - L_JOINT)
+
+if C0_ROUTE == 'out_echo_diff':
+    print('\n--- what the out-bar anchor implies for the rest of the assembly '
+          '--------')
+    print('nothing below was used to identify anything -- these are the '
+          'configured lengths\nmeasured against the one anchor, which is what '
+          'makes them checks.\n')
+    print(f'{"quantity":>24} {"identified":>12} {"config":>10} {"slip":>10}')
+    print(f'{"L_output (out bar)":>24} {L_OUT_IMPLIED:12.2f} {L_OUTPUT:10.2f} '
+          f'{L_OUT_IMPLIED - L_OUTPUT:+10.2f}')
+    _lfr_id = float(L_free[REF])
+    print(f'{f"L_free_ref ({names[REF]})":>24} {_lfr_id:12.2f} '
+          f'{L_FREE_REF:10.2f} {_lfr_id - L_FREE_REF:+10.2f}')
+    if L_JOINT_EFF is not None:
+        print(f'{"joint, acoustic":>24} {L_JOINT_EFF:12.2f} {L_JOINT:10.2f} '
+              f'{L_JOINT_EFF - L_JOINT:+10.2f}')
+        print(f'\nthe joint costs {(L_JOINT_EFF - L_JOINT)/c0_id*1e3:+.1f} us '
+              f'more than {L_JOINT:.0f} mm of bar stock would. It is anchored '
+              f'on\n{names[_anchor]}\'s tape position ({true_pos[_anchor]:.1f} '
+              'mm), the only in-bar length imported; the in-bar\nSPACING below '
+              'is independent of that choice, the in-bar POSITIONS are not.')
+        if abs(L_JOINT_EFF - L_JOINT) > 3.0 * GAUGE_TOL:
+            print('!! That is not a tape error. Either the coupler is not '
+                  'acoustically bar stock,\n!! or a bar length is wrong -- '
+                  'and every number referred through it, L_free_ref\n!! '
+                  'included, inherits the difference. See "What a mismatched '
+                  'coupler costs" in\n!! README.md.')
 
 # --------------------------------------------------------------------------
 # position override -- an EMPIRICAL fallback, not a measurement
@@ -650,25 +821,49 @@ if POS_OVERRIDE:
         print(f'{nm:>7}  identified {id_pos[k]:8.2f} mm -> override '
               f'{float(val):8.2f} mm  ({id_pos[k]-float(val):+.2f} mm)')
         id_pos[k] = float(val)
-        L_free[k] = (id_pos[k] + L_OUTPUT + L_JOINT if k < n_in
+        L_free[k] = (id_pos[k] + L_OUTPUT + L_JOINT_USED if k < n_in
                      else L_OUTPUT - id_pos[k])
         OVERRIDDEN.add(names[k].split('-')[0])
 
-# What the tape costs each position. L_free_k = L_free_ref (1 - 2 lag_k / Q), so
-# d(L_free_k) = (L_free_k / L_free_ref) d(L_free_ref); and x is L_free plus a
-# CONSTANT (L_OUTPUT, L_JOINT) that the tape error does not touch, so the
-# position inherits that as an ABSOLUTE band rather than a relative one. It is
-# much the largest entry on this table, and the only one that is not the
-# timing's fault.
-L_free_band = L_FREE_REF_TOL * L_free / L_FREE_REF
+# What the tape costs each position -- whichever tape number this route
+# actually imported.
+if C0_ROUTE == 'out_echo_diff':
+    # The scale rides on the out-bar spacing, so d(c0)/c0 = d(D_out)/D_out with
+    # d(D_out) = sqrt(2) GAUGE_TOL, two independent readings differenced. An
+    # out-bar position is L_output minus a length that scales with it, so it
+    # takes the whole band; an in-bar position is anchored on the reference
+    # gauge's own tape reading, so it takes that reading's error outright plus
+    # the scale error on its DISTANCE from that anchor -- which is why the in
+    # bar's near gauge is the better-placed one here, not the worse.
+    _REL_TOL = np.sqrt(2.0) * GAUGE_TOL / D_OUT_TAPE
+    L_free_band = np.where(
+        _IS_OUT, _REL_TOL * L_free,
+        _REL_TOL * np.abs(L_free - L_free[_anchor]) + GAUGE_TOL) \
+        if n_in else _REL_TOL * L_free
+else:
+    # L_free_k = L_free_ref (1 - 2 lag_k / Q), so d(L_free_k) =
+    # (L_free_k / L_free_ref) d(L_free_ref); and x is L_free plus a CONSTANT
+    # (L_OUTPUT, L_JOINT) that the tape error does not touch, so the position
+    # inherits that as an ABSOLUTE band rather than a relative one. It is much
+    # the largest entry on this table, and the only one that is not the
+    # timing's fault.
+    L_free_band = L_FREE_REF_TOL * L_free / L_FREE_REF
 
 print('\n--- gauge positions '
       '-------------------------------------------------------')
 print(f'{"gauge":>7} {"L_free (to end)":>18} {"x (from face)":>15} '
       f'{"+-tape":>8} {_ref_lbl:>9} {"error":>9}')
+_ANCHOR_K = _anchor if (C0_ROUTE == 'out_echo_diff' and n_in) else None
 for k, nm in enumerate(names):
+    note = '  <- anchor: this position IS the tape reading' \
+        if k == _ANCHOR_K else ''
     print(f'{nm:>7} {L_free[k]:18.2f} {id_pos[k]:15.2f} {L_free_band[k]:8.2f} '
-          f'{true_pos[k]:9.2f} {id_pos[k]-true_pos[k]:+9.3f}')
+          f'{true_pos[k]:9.2f} {id_pos[k]-true_pos[k]:+9.3f}{note}')
+if _ANCHOR_K is not None:
+    print(f'the {names[_ANCHOR_K]} row is not a measurement: the in bar reaches '
+          'the free end only\nthrough the joint, so one in-bar length is '
+          'imported to fix that leg (see the\njoint line above). Every OTHER '
+          'row here is a measurement.')
 
 print('\n--- gauge spacing D '
       '-------------------------------------------------------')
@@ -681,32 +876,67 @@ for bar, off, cnt in (('in', 0, n_in), ('out', n_in, len(names) - n_in)):
     D_lag = c0_id * dl                      # from raw timing, always printed
     D_used = abs(id_pos[off + 1] - id_pos[off])   # what separate() actually gets
     D_true = abs(true_pos[off + 1] - true_pos[off])
-    note = '  (overridden)' if bar in OVERRIDDEN else ''
+    note = '  (overridden)' if bar in OVERRIDDEN else (
+        '  (anchor -- +0 by construction)'
+        if bar == 'out' and C0_ROUTE == 'out_echo_diff' else '')
     print(f'{bar:>7} {dl*1e3:12.4f} {D_lag:12.3f} {D_used:10.3f} {D_true:9.2f} '
           f'{D_used-D_true:+9.3f}{note}')
+if C0_ROUTE == 'out_echo_diff':
+    # The out row's two D columns come from the two timings that disagree by
+    # 1.2 % (rows 2 and 5 above): the direct-arrival lag, and the echo
+    # difference that set c0. Nothing is wrong with the geometry between them.
+    print('D = c0 dt is the DIRECT-arrival lag; D (used) on the out bar is the '
+          'imported\nspacing that set c0, from the ECHO difference. Their gap '
+          'is rows (2) vs (5).')
 
-# The errors in the "error" columns are what the TIMING costs, with L_free_ref
-# taken as exact. The tape error on L_free_ref is separate and adds on top.
-# D = L_free_1 - L_free_0 and L_FREE_REF cancels out of that difference
-# regardless of which c0 route was used, so D never carries it. c0 itself
-# only escapes it under use_only_out_for_c0 -- otherwise c0 = 2 L_free_ref/Q
-# is directly proportional to L_free_ref. Only the ABSOLUTE positions always
-# carry it, through the L_FREE_REF additive constant in
-# L_free_k = L_FREE_REF - c0 * lag_k -- a tape error there shifts every
-# position by close to the same amount, benign for the same reason as
-# always: a common offset mostly moves where the wave is reconstructed rather
-# than distorting it.
-_c0_tape = ('unaffected -- does not depend on L_free_ref under '
-           'use_only_out_for_c0' if USE_ONLY_OUT_FOR_C0 else
-           f'+-{L_FREE_REF_TOL/L_FREE_REF:.1e} relative '
-           f'(+-{c0_id*L_FREE_REF_TOL/L_FREE_REF:.2f} mm/ms)')
-print(f'\nwith a tape (L_free_ref) good to +-{L_FREE_REF_TOL:.1f} mm on the '
-      f'{L_FREE_REF:.0f} mm reference baseline:\n'
-      f'  c0             : {_c0_tape}\n'
-      f'  D              : unaffected -- L_free_ref cancels out of any '
-      'D = L_free_i - L_free_j\n'
-      f'  positions      : +-{L_free_band.min():.2f} to '
-      f'+-{L_free_band.max():.2f} mm ABSOLUTE (the +-tape column above)')
+# The errors in the "error" columns are what the TIMING costs, with the
+# imported length taken as exact. That length's own tape error is separate and
+# adds on top -- and WHICH quantities it reaches depends on which length was
+# imported, so the summary below is written per route rather than once.
+if C0_ROUTE == 'out_echo_diff':
+    # Here the scale IS the out-bar spacing, so nothing escapes it: c0 scales
+    # with it, and so does every L_free, and so therefore does every OTHER
+    # spacing -- the out bar's own D is the one exception, being the imported
+    # number itself. This is a worse leverage ratio than L_free_ref/D buys
+    # (1077 mm of baseline instead of 3730), which is the price of the single
+    # anchor. It is not a large price: the timing inconsistency it exposes was
+    # 68 mm.
+    _d_in = (_REL_TOL * abs(L_free[1] - L_free[0]) if n_in >= 2 else
+             float('nan'))
+    print(f'\nwith each tape gauge position good to +-{GAUGE_TOL:.1f} mm, so '
+          f'the {D_OUT_TAPE:.0f} mm out-bar\nspacing to '
+          f'+-{np.sqrt(2)*GAUGE_TOL:.1f} mm:\n'
+          f'  c0             : +-{_REL_TOL:.1e} relative '
+          f'(+-{c0_id*_REL_TOL:.2f} mm/ms)\n'
+          f'  D (out)        : the imported number itself, +-'
+          f'{np.sqrt(2)*GAUGE_TOL:.1f} mm\n'
+          f'  D (in)         : +-{_d_in:.2f} mm -- it scales with c0, but '
+          'carries no anchor error\n'
+          f'  positions      : +-{L_free_band.min():.2f} to '
+          f'+-{L_free_band.max():.2f} mm ABSOLUTE (the +-tape column above)\n'
+          '  L_free_ref     : not consumed at all -- it is a CHECK under this '
+          'route, above')
+else:
+    # D = L_free_1 - L_free_0 and L_FREE_REF cancels out of that difference
+    # regardless of which c0 route was used, so D never carries it. c0 itself
+    # only escapes it under "out_echo" -- otherwise c0 = 2 L_free_ref/Q is
+    # directly proportional to L_free_ref. Only the ABSOLUTE positions always
+    # carry it, through the L_FREE_REF additive constant in
+    # L_free_k = L_FREE_REF - c0 * lag_k -- a tape error there shifts every
+    # position by close to the same amount, benign for the same reason as
+    # always: a common offset mostly moves where the wave is reconstructed
+    # rather than distorting it.
+    _c0_tape = ('unaffected -- does not depend on L_free_ref under '
+               'c0_route="out_echo"' if C0_ROUTE == 'out_echo' else
+               f'+-{L_FREE_REF_TOL/L_FREE_REF:.1e} relative '
+               f'(+-{c0_id*L_FREE_REF_TOL/L_FREE_REF:.2f} mm/ms)')
+    print(f'\nwith a tape (L_free_ref) good to +-{L_FREE_REF_TOL:.1f} mm on the '
+          f'{L_FREE_REF:.0f} mm reference baseline:\n'
+          f'  c0             : {_c0_tape}\n'
+          f'  D              : unaffected -- L_free_ref cancels out of any '
+          'D = L_free_i - L_free_j\n'
+          f'  positions      : +-{L_free_band.min():.2f} to '
+          f'+-{L_free_band.max():.2f} mm ABSOLUTE (the +-tape column above)')
 
 # --------------------------------------------------------------------------
 # the symmetry that was NOT assumed, measured instead
@@ -731,9 +961,12 @@ print('\n--- transit times, which is what separate() really needs '
       '-------------')
 print('separate() depends on x_k/c0 only. Note these do NOT inherit the tape\n'
       'error as a small relative number: x is L_free plus a constant the tape\n'
-      'does not scale, so a tape error moves them absolutely. What IS\n'
-      'scale-free is L_free/c0 -- the free-end null below tests exactly that,\n'
-      'and nothing else.\n')
+      'does not scale, so a tape error moves them absolutely'
+      + (' -- and on the in\nbar, under this route, x is measured from an '
+         'anchor whose own tape error it\ntakes outright.'
+         if C0_ROUTE == 'out_echo_diff' else '.')
+      + ' What IS\nscale-free is L_free/c0 -- the free-end null below tests '
+        'exactly that,\nand nothing else.\n')
 print(f'{"gauge":>7} {"x/c0 [us]":>12} {f"{_ref_lbl} [us]":>12} '
       f'{"rel err":>10}')
 for k, nm in enumerate(names):
@@ -986,7 +1219,13 @@ print(f'  gauges = [{", ".join(f"{p:.2f}" for p in id_pos[n_in:])}]'
 IDENT_FILE = 'bar_identified.npz'
 BARS = tuple(b for b, cnt in (('in', n_in), ('out', len(names) - n_in))
             if cnt >= 1)
-_out = dict(case=CASE, bars=np.array(BARS))
+_out = dict(case=CASE, bars=np.array(BARS), c0_route=C0_ROUTE)
+# Assembly-wide, not per bar: what the one anchor implied for the lengths it
+# did not consume. Absent under the routes that never derive them.
+if L_OUT_IMPLIED is not None:
+    _out['L_output_implied'] = L_OUT_IMPLIED
+if L_JOINT_EFF is not None:
+    _out['L_joint_eff'] = L_JOINT_EFF
 for b, off, cnt in (('in', 0, n_in), ('out', n_in, len(names) - n_in)):
     if cnt < 1:
         continue
@@ -1016,12 +1255,14 @@ SURFACE = '#fcfcfb'
 # One column per bar -- in, out -- three rows each: what was measured, its
 # derivative (the edges everything above is actually timed on), and F = P+M
 # reconstructed from THAT bar's own two gauges alone, at ITS OWN interface.
-# A fourth row adds the free-end null test's own reconstruction (stress at
-# the free surface, which should sit at zero) -- but only in the OUTPUT
-# bar's column, since that test only ever uses the output bar's gauges (see
-# its section comment above): the in bar's far end is the anvil, not a free
-# surface, so there is no equivalent panel for it, and that row is left
-# blank there. All rows share `t_null` (see above: the record truncated
+# A fourth row carries a different check in each column. RIGHT: the free-end
+# null test's own reconstruction (stress at the free surface, which should sit
+# at zero) -- only the OUTPUT bar has one, since that test only ever uses the
+# output bar's gauges (see its section comment above); the in bar's far end is
+# the anvil, not a free surface. LEFT: the two bars' interface forces
+# overlaid, which is the check the in bar CAN carry -- force is continuous
+# across the coupler, so those two independent solves must agree.
+# All rows share `t_null` (see above: the record truncated
 # before the earliest clip onset, for a measured shot) so a clipped tail
 # cannot leak into the reconstruction the same way it cannot leak into the
 # free-end null.
@@ -1031,6 +1272,9 @@ fig, axes = plt.subplots(4, len(COLS), figsize=(9.5 * len(COLS), 15.5),
                          sharex=True, squeeze=False)
 fig.patch.set_facecolor(SURFACE)
 _blank_axes = set()
+F_BARS = {}          # each bar's F = P + M at its own coupler face, for the
+                     # equilibrium panel that fills the in column's last row
+_ax_equil = None     # that panel's axes, once the in column has been drawn
 
 for col, (bar, off, cnt) in enumerate(COLS):
     idx = slice(off, off + cnt)
@@ -1101,6 +1345,7 @@ for col, (bar, off, cnt) in enumerate(COLS):
     p_b, m_b = separate(t_null, bsig, bx, c0=c0_id, eta=d['eta'],
                         attenuation=gatt, dispersion=gdisp)
     F_b = p_b + m_b
+    F_BARS[bar] = F_b
 
     ax2 = axes[2, col]
     pos_lbl = 'overridden position' if bar in OVERRIDDEN else 'identified positions'
@@ -1139,7 +1384,63 @@ for col, (bar, off, cnt) in enumerate(COLS):
         ax3.legend(frameon=False, fontsize=9, labelcolor=MUTED,
                   loc='lower left')
     else:
-        _blank_axes.add(ax3)
+        _ax_equil = ax3          # filled in below, once BOTH bars are solved
+
+# --------------------------------------------------------------------------
+# the in column's last row: force equilibrium across the coupler
+# --------------------------------------------------------------------------
+# Row 2 already shows each bar's F = P + M at its own coupler face, one per
+# column, which is the right place to judge each reconstruction on its own.
+# Overlaying them is a different question: force is continuous across a rigid
+# coupler, so the two curves are two INDEPENDENT measurements of one quantity
+# -- separate solves, separate gauges, sharing only c0 -- and where they part
+# company is the honest error bar on the whole identification. It is exactly
+# bar_equilibrium.py's number, computed here from this run's own numbers
+# (including the identified alpha(f)/c_p(f), which bar_equilibrium.py does not
+# apply) so the figure needs no second script to be read.
+#
+# The two curves are NOT at the same place: they are one coupler apart, and
+# nothing here shifts either of them. On this rig that gap is the identified
+# L_joint_eff, ~18 us -- see the joint line in the table above, and NOTES.md
+# thread 11 for why a plain time shift does not reconcile the two.
+if 'in' in F_BARS and 'out' in F_BARS:
+    F_in_b, F_out_b = F_BARS['in'], F_BARS['out']
+    _pk = float(np.abs(F_in_b).max())
+    _eq = np.abs(F_in_b - F_out_b) / (_pk if _pk > 0 else 1.0)
+    # Same window convention as the free-end null and bar_equilibrium.py:
+    # clear of the quiescent start, and of the tail the eta-window amplifies.
+    _amp_e = max(_pk, float(np.abs(F_out_b).max()))
+    _e0 = int(np.argmax((np.abs(F_in_b) + np.abs(F_out_b)) > 0.02 * _amp_e))
+    _e1 = min(int(NULL_WINDOW * N), len(t_null))
+    _ew = slice(_e0, _e1)
+    _eq_mean = float(_eq[_ew].mean()) if _e1 > _e0 else float('nan')
+    _eq_max = float(_eq[_ew].max()) if _e1 > _e0 else float('nan')
+
+    _ax_equil.plot(t_null, F_in_b * SCALE, lw=1.0, color=BLUE,
+                   label='$F_{in}$ at the input-bar / coupler face')
+    _ax_equil.plot(t_null, F_out_b * SCALE, lw=1.0, color=ORANGE,
+                   label='$F_{out}$ at the output-bar / coupler face')
+    _ax_equil.plot(t_null, (F_in_b - F_out_b) * SCALE, color=INK, lw=1.1,
+                   label='$F_{in} - F_{out}$ (should be 0)')
+    _ax_equil.axhline(0, color=GRID, lw=1.0)
+    if _e1 > _e0:
+        _ax_equil.axvspan(t_null[_e0], t_null[_e1 - 1], color=GRID, alpha=.35,
+                          label='mean/max window')
+    _ax_equil.set_xlabel('Time (ms)')
+    _ax_equil.set_ylabel(f'Interface force ({USYM})')
+    _ax_equil.set_title(
+        'Force equilibrium across the coupler — two independent solves of one '
+        f'force:\nmean |$F_{{in}}-F_{{out}}$|/max|$F_{{in}}$| = {_eq_mean:.2e}, '
+        f'max {_eq_max:.2e}  (the two faces are one coupler apart, unshifted)',
+        loc='left', fontsize=10)
+    _ax_equil.legend(frameon=False, fontsize=9, labelcolor=MUTED,
+                     loc='lower left')
+    print(f'\nforce equilibrium across the coupler (figure, bottom left) : '
+          f'mean {_eq_mean:.4e}, max {_eq_max:.4e}')
+elif _ax_equil is not None:
+    # An in column exists but the out bar carries fewer than 2 gauges, so
+    # there is no second force to compare it against. Blank, as before.
+    _blank_axes.add(_ax_equil)
 
 axes[0, 0].set_xlim(0, t_null[-1])
 
@@ -1156,7 +1457,8 @@ for ax in axes.flat:
     ax.title.set_color(INK)
 
 fig.suptitle('Per-bar identification check — each column reconstructed from '
-             'ONLY that bar\'s own two gauges', x=.006, ha='left', fontsize=13,
+             'ONLY that bar\'s own two gauges; the bottom-left panel is the '
+             'one place the two meet', x=.006, ha='left', fontsize=13,
              color=INK)
 fig.tight_layout(rect=(0, 0, 1, .97))
 FIG = f'bar_identification_{CASE}.png' if EXPERIMENT \

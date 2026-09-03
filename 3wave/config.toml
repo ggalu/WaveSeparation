@@ -626,18 +626,32 @@ L_free_ref = 3730.0                # in-0 (force_in1) -> output bar's far free e
 L_free_ref_gauge = "in-0"
 L_free_ref_tol = 5.0               # what the tape is good to [mm]
 
-# c0 from the output bar's own two free-end echoes alone, bypassing
-# L_free_ref/Q entirely: out-0 and out-1 agree to 9.6e-4 relative here, and
-# this route never crosses the threaded joint (see identify_bar_tension.py's
-# "c0 -- FINAL" section). NOT the default -- only two numbers to average, so
-# nothing catches one of them being mis-detected, which is exactly what
-# happens on calibration_tension's out-0. Confirmed safe here first.
-use_only_out_for_c0 = true
+# c0 from the DIFFERENCE of the two out-bar free-end echoes, and every L_free
+# from that gauge's own echo: one anchor, the out-bar gauge spacing, and no
+# other length -- not L_output, not L_free_ref, not the joint. See
+# "[.c0_route]" in identify_bar_tension.py's docstring.
+#
+# This case was on "out_echo" (the old use_only_out_for_c0 = true), which
+# anchors c0 on the out-bar tape positions and the POSITIONS on L_free_ref.
+# Those two anchors disagree by 68 mm here, so the out gauges came back 58 and
+# 69 mm from the same tape that had set c0. Under this route they come back
+# at -3.7 mm, both -- which is not zero either, and says L_output is 2780.7
+# rather than the 2777 below.
+#
+# NOT the default: like "out_echo" it needs both out-bar echoes and has no
+# redundancy if one is mis-detected, which is exactly what happens on
+# calibration_tension's out-0. Both echoes confirmed to agree here first
+# (9.6e-4 relative, rows 3 and 4 of the c0 table).
+c0_route = "out_echo_diff"
+gauge_tol = 2.0                    # what ONE tape gauge position is good to [mm]
 
 [experiment_tension_bar_2.position_override]
-# in-1 identifies at 138.01 mm from the arrival-lag route, ~18 mm off tape
-# (120 mm) and outside its own +-3.94 mm tape tolerance -- an order of
-# magnitude worse than every other gauge on this rig manages. Investigated at
+# in-1 identifies at 129.27 mm under c0_route = "out_echo_diff" (138.01 mm
+# under the old arrival-lag route, which also had the joint's 68 mm smeared
+# into it), ~9 mm off tape (120 mm) and outside its own +-4.14 mm tape
+# tolerance -- an order of magnitude worse than every other gauge on this rig
+# manages, and the one part of that gap the joint does NOT explain.
+# Investigated at
 # length (NOTES.md, thread 10 addendum): neither the identified alpha(f), nor
 # the identified c_p(f) (borrowed from the out bar), nor a direct near/far
 # transfer-function fit between in-0 and in-1 reproduces this gap under any
