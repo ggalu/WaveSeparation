@@ -745,36 +745,41 @@ for k, nm in enumerate(names):
         print(f'{nm:>7} {a*1e3:12.4f} {b*1e3:12.4f} {a/b-1:+10.2e}')
 
 # --------------------------------------------------------------------------
-# attenuation and dispersion -- only where [.attenuation] is configured
+# attenuation and dispersion -- from the OUTPUT bar's two gauges, ONLY
 # --------------------------------------------------------------------------
-# Same method as identify_bar_compression.py's polycarbonate case, extended:
-# fit_attenuation's per-band transfer function gives alpha(f) from magnitude
-# and, when handed c0, a phase-velocity table c_p(f)/c0 from phase -- both from
+# Same method as identify_bar_compression.py's polycarbonate case: fit_
+# attenuation's per-band transfer function gives alpha(f) from magnitude and,
+# when handed c0, a phase-velocity table c_p(f)/c0 from phase -- both from
 # the SAME two-gauge spectra, no boundary condition involved. A metal bar is
 # expected to be lossless (alpha ~ 0), but Pochhammer-Chree dispersion is a
 # property of the CYLINDER, not the material, and is not: with c_p = c0
 # assumed at every frequency, the wavefront edge on the SHTB tension bar's
 # out-0/out-1 pair (120 / 1200 mm) leaks a small transient into P and M right
 # where the edge passes the far gauge. See NOTES.md, open thread 10.
+#
+# The `in` bar is never fit here, on this rig or any other: its own gauge
+# pair runs opposite to propagation (the wave reaches the larger-x gauge
+# first), which loses the phase fit outright -- see identify_attenuation's
+# direction note -- and [.position_override], when it touches `in`, leaves
+# its id_pos disagreeing with the arrival timing the fit assumes anyway.
+# alpha(f) and c_p(f) are properties of the CYLINDER (Pochhammer-Chree), not
+# of which half of it a gauge sits on -- this script already assumes ONE
+# uniform bar end to end (the diameter check above refuses to run otherwise)
+# -- so the output bar's fit is simply carried over rather than re-derived.
 ATT = {}
 if EXPERIMENT and 'attenuation' in cfg:
     from identify_attenuation import fit_attenuation
     ac = cfg['attenuation']
-    print('\n--- attenuation and dispersion, from the two gauges alone '
-          '------------')
-    for bar, off, cnt in (('in', 0, n_in), ('out', n_in, len(names) - n_in)):
-        if cnt < 2:
-            continue
-        if bar in OVERRIDDEN:
-            # id_pos here came from config, not from arrival[]/tau[] -- fitting
-            # this bar's own pair would divide a tape-supplied dx by an
-            # arrival-lag-derived lag, two numbers that no longer describe the
-            # same measurement. Borrowed from the other bar below instead.
-            print(f'{bar:>5} not fit: its position was overridden above, so '
-                  'its own alpha(f)/c_p(f)\n      would divide an '
-                  'arrival-lag delay by a tape-supplied distance -- borrowed '
-                  'below instead')
-            continue
+    print('\n--- attenuation and dispersion, from the output bar\'s two '
+          'gauges alone ------')
+    off, cnt = n_in, len(names) - n_in
+    if cnt < 2:
+        print('out not measurable: fewer than 2 gauges on the output bar')
+    elif 'out' in OVERRIDDEN:
+        print('out not fit: its position was overridden above, so alpha(f)/'
+              'c_p(f)\n      would divide an arrival-lag delay by a '
+              'tape-supplied distance')
+    else:
         try:
             a = fit_attenuation(t, signals[off:off + cnt], id_pos[off:off + cnt],
                                 arrival[off:off + cnt],
@@ -784,54 +789,34 @@ if EXPERIMENT and 'attenuation' in cfg:
                                 snr=float(ac.get('snr', 0.005)),
                                 c0=c0_id)
         except ValueError as exc:
-            print(f'{bar:>5} not measurable: {exc}')
-            continue
-        ATT[bar] = a
-        fb, ab = a['table']
-        mid = len(fb) // 2
-        print(f'{bar:>5} single-wave window {a["span"]*1e3:.0f} us, '
-              f'{a["pairs"]} gauge pair(s), band {a["f_lo"]:.0f}-'
-              f'{a["f_hi"]:.0f} kHz')
-        print(f'{"":>5} alpha at {fb[mid]:.0f} / {a["f_hi"]:.0f} kHz: '
-              f'{ab[mid]:.2e} / {ab[-1]:.2e} /mm')
-        if a['dispersion_table'] is None:
-            # Every pair on this bar runs opposite to propagation (the wave
-            # reaches the larger-x gauge first) -- see identify_attenuation's
-            # direction note. A single reversed pair cannot be corrected for,
-            # only detected; this bar simply gets no dispersion table.
-            print(f'{"":>5} c_p/c0: not measurable -- the only gauge pair '
-                  'here runs opposite to propagation')
+            print(f'out not measurable: {exc}')
         else:
-            fbd, cpr = a['dispersion_table']
-            print(f'{"":>5} c_p/c0 at {fbd[mid]:.0f} / {a["f_hi"]:.0f} kHz: '
-                  f'{cpr[mid]:.4f} / {cpr[-1]:.4f}  (scalar c_p = {a["c_p"]:.1f} '
-                  f'mm/ms against c0 = {c0_id:.1f})')
-            print(f'{"":>5} far gauge predicted from near, relative L2: '
-                  f'lossless {a["misfit_lossless"]:.2e}, alpha only '
-                  f'{a["misfit"]:.2e}, alpha+dispersion '
-                  f'{a["misfit_dispersion"]:.2e}')
-
-    # A bar whose only gauge pair runs opposite to propagation (see the
-    # direction note above -- the in bar on this rig) cannot have c_p(f)
-    # MEASURED, only borrowed. This script already assumes ONE uniform bar
-    # end to end -- the check just above the [.input_bar]/[.output_bar]
-    # tables refuses to run at all if their diameters disagree -- so the
-    # bar this borrows from is not a guess, it is the same rod stock. c_p(f)
-    # is a property of the CYLINDER (Pochhammer-Chree), not of which half of
-    # it a gauge happens to sit on.
-    for bar, other in (('in', 'out'), ('out', 'in')):
-        if bar in OVERRIDDEN and bar not in ATT and other in ATT:
-            # Not fit at all above -- borrow the WHOLE result, alpha included,
-            # not just c_p(f): its own position being untrustworthy sinks
-            # both halves of the fit equally, not only the phase half.
-            ATT[bar] = ATT[other]
-            print(f'{bar:>5} alpha(f), c_p/c0: borrowed from the {other} bar '
-                  'in full -- own position overridden, not fit')
-        elif (bar in ATT and ATT[bar]['dispersion_table'] is None
-                and other in ATT and ATT[other]['dispersion_table'] is not None):
-            ATT[bar]['dispersion_table'] = ATT[other]['dispersion_table']
-            print(f'{bar:>5} c_p/c0: borrowed from the {other} bar -- same rod '
-                  'stock and diameter, own pair runs opposite to propagation')
+            ATT['out'] = a
+            fb, ab = a['table']
+            mid = len(fb) // 2
+            print(f'{"out":>5} single-wave window {a["span"]*1e3:.0f} us, '
+                  f'{a["pairs"]} gauge pair(s), band {a["f_lo"]:.0f}-'
+                  f'{a["f_hi"]:.0f} kHz')
+            print(f'{"":>5} alpha at {fb[mid]:.0f} / {a["f_hi"]:.0f} kHz: '
+                  f'{ab[mid]:.2e} / {ab[-1]:.2e} /mm')
+            if a['dispersion_table'] is None:
+                # This bar's only pair runs opposite to propagation -- see
+                # identify_attenuation's direction note. A single reversed
+                # pair cannot be corrected for, only detected.
+                print(f'{"":>5} c_p/c0: not measurable -- the only gauge '
+                      'pair here runs opposite to propagation')
+            else:
+                fbd, cpr = a['dispersion_table']
+                print(f'{"":>5} c_p/c0 at {fbd[mid]:.0f} / {a["f_hi"]:.0f} '
+                      f'kHz: {cpr[mid]:.4f} / {cpr[-1]:.4f}  (scalar c_p = '
+                      f'{a["c_p"]:.1f} mm/ms against c0 = {c0_id:.1f})')
+                print(f'{"":>5} far gauge predicted from near, relative L2: '
+                      f'lossless {a["misfit_lossless"]:.2e}, alpha only '
+                      f'{a["misfit"]:.2e}, alpha+dispersion '
+                      f'{a["misfit_dispersion"]:.2e}')
+            ATT['in'] = a
+            print(f'{"in":>5} alpha(f), c_p/c0: same as out above -- one '
+                  'cylinder, not fit separately')
 
 # --------------------------------------------------------------------------
 # free-end null test -- the only check here that needs no ground truth
