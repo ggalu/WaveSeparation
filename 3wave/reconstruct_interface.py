@@ -47,6 +47,32 @@ attenuation against gauge magnitudes, screen it on the free end, and confirm it
 here.
 
 --------------------------------------------------------------------------
+What the figure shows
+--------------------------------------------------------------------------
+The same rows as identify_bar_tension.py's figure, minus its matched-filter
+edge row -- there is nothing to time here, since a specimen is exactly what
+destroys the edges, and nothing on this record is being identified:
+
+    row 0, per bar   what was measured
+    row 1, per bar   F = P + M at THAT bar's own face
+    row 2, left      force equilibrium across the interface, both bars overlaid
+    row 2, right     the free-end null, at BAR's own far free surface
+
+The bottom row is the pair of checks that need no ground truth. Neither is
+possible on a single bar's record alone: the equilibrium needs the OTHER bar's
+independent solve, and the null needs the identified distance to a free
+surface. Both come out of bar_identified.npz, which is the point -- on a real
+shot the specimen has destroyed every feature the identification reads, so
+c0, the gauge positions, alpha(f), c_p(f) and the free-end distances all come
+from a calibration shot fired on the same bars, and NOTHING here is identified
+from the record being reduced.
+
+Which makes the free-end null the check that matters most on this script. A
+calibration carried over from another shot can be stale -- a gauge re-bonded, a
+bar swapped, the wrong case named -- and the null is where that shows up,
+because it is the one panel whose answer is known in advance.
+
+--------------------------------------------------------------------------
 Two position sets, side by side
 --------------------------------------------------------------------------
 Both are run and both are reported, because on the PC shot they differ. The
@@ -119,6 +145,39 @@ x_id = np.asarray(ID[f'x_{BAR}'], float)
 x_tape = (np.asarray(ID[f'tape_{BAR}'], float) if f'tape_{BAR}' in ID.files
           else None)
 
+# Each gauge's own distance to its bar's far FREE surface, as identified. This
+# is a property of the BAR -- swapping the coupler for a specimen does not move
+# the output bar's free end -- so it travels with the calibration to any later
+# shot, exactly like x and c0 do.
+#
+# It has to be read, not reconstructed as L - x. L_ref_{b} is the assembly-wide
+# L_free_ref under identify_bar_tension.py's default route (3730 mm from an
+# in-bar gauge, across the joint), not either bar's own length to its own free
+# end, so L - x there is off by the whole input bar -- 3611 mm against the true
+# 2658 on experiment_tension_bar_2, and the free-end null built on it is noise.
+# The compression identifier's L_ref IS that bar's own length, which is why the
+# subtraction looked right for as long as only that one was in use.
+L_FREE = {}
+for _b in BARS:
+    if f'L_free_{_b}' in ID.files:
+        L_FREE[_b] = np.asarray(ID[f'L_free_{_b}'], float)
+    else:
+        L_FREE[_b] = (float(ID[f'L_ref_{_b}'])
+                      - np.asarray(ID[f'x_{_b}'], float))
+        print(f'!! {IDENT_FILE} carries no L_free_{_b}; falling back to '
+              f'L_ref - x, which\n!! is only that bar\'s free-end distance if '
+              'L_ref is its OWN length. Re-run the\n!! identification to get '
+              'the identified value.')
+
+# On the SHTB the input bar's own far end is the anvil, not a free surface, so
+# its L_free is measured the long way round -- through whatever sat at the
+# interface during the calibration, and then down the whole output bar. That
+# path is intact only while the interface is the one the calibration saw. Swap
+# the coupler for a specimen and the distance is still the same mm of bar but
+# no longer the same acoustic path, so the null on this bar stops meaning
+# anything. Say so rather than print a number that looks like a check.
+NULL_VALID = not (BAR == 'in' and CASE != str(ID['case']))
+
 # What sits at x = 0. The calibration shot has the two bars touching directly;
 # a specimen shot has something in between. Only the REPORTING depends on it --
 # the solve is identical, because `separate` was never told about boundaries.
@@ -143,6 +202,19 @@ if abs(_L_cfg - L) > 1.0:
         f'{IDENT_FILE} identified a {L:.1f} mm bar but [{CASE}] describes one '
         f'{_L_cfg:.1f} mm long.\nThose are not the same bar. Re-run the '
         'identification for this rig, or fix the case.')
+
+# [<CASE>].requires, when present, names the ONE case this shot's calibration
+# must come from -- see config.py's _validate_experiment. Catches a stale
+# bar_identified.npz (built from the wrong calibration shot) with a clear
+# message, rather than letting it run and reporting numbers this rig never
+# measured.
+_REQUIRES = cfg.get('requires')
+if _REQUIRES is not None and _REQUIRES != str(ID['case']):
+    raise SystemExit(
+        f'[{CASE}] requires the identification from [{_REQUIRES}], but '
+        f'{IDENT_FILE} was built from [{str(ID["case"])}].\nRun:\n'
+        f'    python3 identify_bar_tension.py --experiment {_REQUIRES}\n'
+        f'then re-run this script.')
 
 ATT = None
 if f'alpha_{BAR}' in ID.files and not ARGS.no_attenuation:
@@ -253,7 +325,10 @@ def _echo_rise(m, t_echo):
     i_R = int(np.searchsorted(t, t_echo))
     lo, hi = i_R, min(len(a), int(np.searchsorted(t, t_echo + 0.5)))
     if hi - lo < 4:
-        return 3.0 * float(np.mean(np.diff(t)))
+        # The echo lands within a few samples of the record end, so there is no
+        # plateau to walk back from. Same (rise, measured?) shape as the normal
+        # return -- a bare float here used to crash the unpack in checks().
+        return 3.0 * float(np.mean(np.diff(t))), False
     top = float(np.max(a[lo:hi]))
     j90 = lo + int(np.argmax(a[lo:hi] > 0.9 * top))
     # Do not walk back past the moment the wave LEFT x = 0. Nothing before that
@@ -287,6 +362,17 @@ def checks(p, m, F):
     """
     amp = float(np.abs(p).max())
     t_echo = _echo_time(p)
+    # wavefront_time() anchors on the steepest rise before the GLOBAL peak of
+    # |P|, which assumes that peak belongs to the initial loading. On a record
+    # where P keeps building past the initial edge -- multiple reflections in
+    # a short assembly loading a real specimen, as opposed to the calibration
+    # shot's one clean pulse -- the global peak can sit late in the record and
+    # the search walks back from THAT instead, putting t_echo past the record's
+    # own end. The reconstruction itself (F = P + M, the free-end null) never
+    # depends on this; only the four boundary-condition checks below do, and
+    # they simply do not resolve on a record like that. Say so rather than
+    # report a number computed from a clamped, meaningless window.
+    echo_in_record = t_echo <= float(t[-1])
     # windows start at the wavefront, not at the record's first stirring
     i_on = int(np.searchsorted(t, t_echo - R))
     # How long the LOADING takes at x = 0, 10-90, measured over the loading
@@ -312,10 +398,11 @@ def checks(p, m, F):
     # is BOTH after the loading and before the echo, and the check simply does
     # not apply to this record. Say so rather than clamp it into a number.
     causality = (float(np.abs(m[i_on:i_pre]).max() / amp)
-                 if i_pre > i_on + 2 else float('nan'))
+                 if echo_in_record and i_pre > i_on + 2 else float('nan'))
     return dict(
         amp=amp, i_on=i_on, i_pre=i_pre, i_sep=i_sep, i_end=i_end, rise=rise,
-        causality_ok=(i_pre > i_on + 2), rise_ok=rise_ok,
+        causality_ok=(echo_in_record and i_pre > i_on + 2),
+        echo_in_record=echo_in_record, rise_ok=rise_ok,
         rise_p=rise_p,
         causality=causality,
         tensile=(float('nan') if TENSION else
@@ -329,24 +416,37 @@ def checks(p, m, F):
 
 
 def free_end(x):
-    """The free-end null, from the same positions: L - x are distances from it."""
-    p, m = separate(t, sig, L - np.asarray(x, float), c0=c0, eta=eta,
+    """
+    The free-end null, from one position set: eps_+ + eps_- = 0 at the surface.
+
+    The identified L_FREE belongs to the identified x. A different position set
+    is the same gauges measured from a different origin ON THE SAME BAR, so it
+    shifts L_free by exactly what it shifts x, the other way -- which is what
+    makes running the tape set through this test meaningful rather than
+    circular.
+    """
+    lf = L_FREE[BAR] + (x_id - np.asarray(x, float))
+    p, m = separate(t, sig, lf, c0=c0, eta=eta,
                     dispersion=DISP, attenuation=ATT)
     tot, amp = p + m, float(np.abs(p).max())
     w = slice(int(np.argmax(np.abs(p) > 0.02 * amp)),
               int(float(cfg.get('null', {}).get('window', 0.75)) * N))
-    return dict(p=p, m=m, tot=tot, amp=amp, w=w,
-                rms=float(np.sqrt(np.mean(tot[w] ** 2)) / amp))
+    return dict(p=p, m=m, tot=tot, amp=amp, w=w, L_free=lf,
+                rms=float(np.sqrt(np.mean(tot[w] ** 2)) / amp),
+                max=float(np.abs(tot[w]).max() / amp))
 
 
 SETS = [('identified', x_id)]
 if x_tape is not None:
     SETS.append(('tape', x_tape))
 RES = {}
+NULL = {}
 for name, x in SETS:
     p, m, F = reconstruct(x)
     RES[name] = dict(x=x, p=p, m=m, F=F, **checks(p, m, F))
-    RES[name]['null'] = free_end(x)['rms']
+    NULL[name] = free_end(x)
+    RES[name]['null'] = NULL[name]['rms']
+NULL_TOL = float(cfg.get('null', {}).get('tol', cfg.get('null_tol', 5.0e-3)))
 
 # The other bar's own waves at ITS face, and the force each side of the
 # interface implies -- should agree, since force is continuous across it.
@@ -359,7 +459,22 @@ if OTHER is not None:
     _r0 = RES[SETS[0][0]]
     _peak_eq = float(np.abs(_r0['F']).max())
     equilibrium = np.abs(_r0['F'] - F_o) / (_peak_eq if _peak_eq > 0 else 1.0)
-    _win = slice(_r0['i_on'], _r0['i_end'])
+    # Force continuity across the interface is a property of the two
+    # RECONSTRUCTIONS alone -- it needs no wavefront search, and i_on (the
+    # window's usual start) is only used here to skip the quiescent lead-in.
+    # When checks()'s echo-timing search resolved, keep that start exactly as
+    # before; when it did not (echo_in_record False -- a record whose P has no
+    # single clean peak, see above), i_on is not trustworthy and this check
+    # should not inherit that failure, so fall back to the whole record.
+    _win = slice(_r0['i_on'] if _r0['echo_in_record'] else 0, _r0['i_end'])
+
+# The interface force by BAR NAME rather than by which one --bar made primary.
+# The figure and the .dat both want it that way round: F_in is the input bar's
+# face whichever bar the checks happened to run on.
+F_BY = {BAR: RES[SETS[0][0]]['F']}
+if OTHER is not None:
+    F_BY[OTHER] = F_o
+DAT_BARS = [b for b in ('in', 'out') if b in F_BY]
 
 print('\n--- interface force, and the checks that need no ground truth '
       '-------')
@@ -380,10 +495,30 @@ print('the right-hand columns are fractions of peak |P|. Zero is the '
       'ideal;\nwhat is left is model error, and its SIGN is known -- a contact '
       'that pulls or a\nwave that arrives early is not a measurement, it is the '
       'residual.')
+if not NULL_VALID:
+    print(f'the free-end column is NOT a check on this run: the {BAR} bar '
+          'reaches the free\nend through the interface, and this is not the '
+          'shot the calibration measured\nthat path on. Reported, not to be '
+          'read as PASS or FAIL.')
+else:
+    print(f'the free-end null uses the IDENTIFIED distances to the {BAR} bar\'s '
+          f'own free\nsurface, {L_FREE[BAR].min():.0f}-{L_FREE[BAR].max():.0f} '
+          f'mm; threshold for this case is {NULL_TOL:.1e}.')
 _r0 = RES[SETS[0][0]]
 _T0 = float(d.get('t0_file', 0.0))
-print(f'the echo reaches x = 0 at {_r0["t_echo"] + _T0:.0f} us (source-file base) '
-      '-- one round trip\nafter the wave LEFT it, not after the record started.')
+if _r0['echo_in_record']:
+    print(f'the echo reaches x = 0 at {_r0["t_echo"] + _T0:.0f} us (source-file '
+          'base) -- one round trip\nafter the wave LEFT it, not after the '
+          'record started.')
+else:
+    print(f'the echo-timing search did NOT resolve on this record: P keeps '
+          'rising past its\ninitial edge -- likely multiple reflections '
+          'loading a real specimen, unlike the single\nclean pulse a '
+          'calibration shot gives -- so the search for "where the wave left '
+          'x = 0"\nwalked back from that later rise instead. The '
+          'reconstruction itself (F = P + M,\nthe free-end null) does not '
+          'depend on this; only causality below does, and it is\nreported '
+          'n/a rather than computed from a meaningless window.')
 if _r0['rise_ok']:
     print(f'its own 10-90 rise there measures {_r0["rise"]*1e3:.0f} us after '
           f'crossing 2L = {2*L:.0f} mm of\nlossy bar, and that is the clearance '
@@ -446,6 +581,10 @@ else:
         print(f'  nothing returns to x = 0 until the free-end echo at '
               f'{r["t_echo"]:.0f} us, and M holds\n    to {r["causality"]:.3f} '
               'of peak before it')
+    elif not r['echo_in_record']:
+        print('  the causality check DOES NOT APPLY to this record: the '
+              'echo-timing search did not\n    resolve (see above) -- '
+              'reported n/a, not computed from a meaningless window.')
     else:
         print(f'  the causality check DOES NOT APPLY to this record: the echo '
               f'edge at x = 0 is\n    so broad that it reaches back to the '
@@ -461,198 +600,170 @@ else:
 import matplotlib.pyplot as plt   # backend already chosen by plotting.init
 
 BLUE, ORANGE, INK, MUTED, GRID = '#2a78d6', '#eb6834', '#0b0b0b', '#52514e', '#d8d7d3'
-EQ_COL = '#8a7a3d'
 SURFACE = '#fcfcfb'
 tt = t * 1e3
 T0_FIG = float(d.get('t0_file', 0.0))
 tt_f = tt + T0_FIG
 
+# Same rows as identify_bar_tension.py's figure, minus its matched-filter row
+# (there is nothing to time here -- the edges are what a specimen destroys, and
+# nothing on this record is being identified from them):
+#
+#   row 0, per bar   what was measured
+#   row 1, per bar   F = P + M at THAT bar's own face
+#   row 2, left      force equilibrium across the interface, both bars overlaid
+#   row 2, right     the free-end null, at BAR's own far free surface
+#
+# The bottom row is the pair of checks that need no ground truth, one per
+# column, exactly as there. With a single bar identified there is no
+# equilibrium to draw and only the null is shown.
+#
+# Only BAR (the one checks()/free_end() ran on) has the echo/causality/tensile/
+# bars-part diagnostics computed at all, so those annotations sit on BAR's
+# column, whichever physical bar that happens to be.
+PANEL = {BAR: dict(sig=sig, x=x_id, F=None, att=ATT, primary=True)}
 if OTHER is not None:
-    # One column per bar -- in, out -- three rows each: what was measured,
-    # the two waves separated AT THAT BAR'S OWN face, and F = P+M there. Only
-    # BAR (the one `checks()`/`free_end()` ran on) has the echo/causality/
-    # tensile/bars-part diagnostics computed at all, so those annotations sit
-    # on BAR's column only, whichever physical bar that happens to be; the
-    # equilibrium residual is a property of the shared interface and always
-    # goes with BAR's F panel, since `equilibrium` above is normalised by
-    # BAR's own peak.
-    PANEL = {
-        BAR: dict(sig=sig, x=x_id, p=r['p'], m=r['m'], att=ATT, primary=True),
-        OTHER: dict(sig=sig_o, x=x_o, p=p_o, m=m_o, att=ATT_o, primary=False),
-    }
-    COLS = [b for b in ('in', 'out') if b in PANEL]
-    fig, axes = plt.subplots(3, 2, figsize=(19, 12), sharex=True)
-    fig.patch.set_facecolor(SURFACE)
+    PANEL[OTHER] = dict(sig=sig_o, x=x_o, F=F_o, att=ATT_o, primary=False)
+COLS = [b for b in ('in', 'out') if b in PANEL]
+NULL_COL = COLS.index(BAR)
+EQ_COLI = next((i for i, b in enumerate(COLS) if b != BAR), None)
 
-    for col, bname in enumerate(COLS):
-        pnl = PANEL[bname]
+# 11 in is the narrowest the suptitle fits in; two columns get 9.5 each, which
+# is the width the two-bar layout has always had.
+fig, axes = plt.subplots(3, len(COLS), figsize=(max(11.0, 9.5 * len(COLS)), 12),
+                         sharex=True, squeeze=False)
+fig.patch.set_facecolor(SURFACE)
 
-        # --- what went in --------------------------------------------------
-        ax0 = axes[0, col]
-        for k, s in enumerate(pnl['sig']):
-            ax0.plot(tt_f, s * SCALE, lw=.9, color=(BLUE, ORANGE, INK)[k % 3],
-                     label=f'gauge {k} at {pnl["x"][k]:.0f} mm (identified)')
-        ax0.set_ylabel(f'Gauge signal ({USYM})')
-        ax0.set_title(f'What was measured — {len(pnl["sig"])} gauges on the '
-                      f'{bname} bar', loc='left', fontsize=11)
-        _g = max(np.abs(s_).max() for s_ in pnl['sig']) * SCALE
-        ax0.set_ylim(-1.3 * _g, 1.35 * _g)
-        ax0.legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
+for col, bname in enumerate(COLS):
+    pnl = PANEL[bname]
 
-        # --- the two waves at that bar's own face ---------------------------
-        ax1 = axes[1, col]
-        ax1.plot(tt_f, pnl['p'] * SCALE, color=BLUE, lw=.9,
-                 label=r'$P$  (leaving the interface, into the bar)')
-        ax1.plot(tt_f, pnl['m'] * SCALE, color=ORANGE, lw=.9,
-                 label=r'$M$  (returning to the interface)')
-        causal_note = ''
-        if pnl['primary']:
-            ax1.axvline(r['t_echo'] + T0_FIG, color=MUTED, lw=1.1, ls='--')
-            ax1.annotate('  free-end echo arrives, $2L/c$ after the wave left',
-                         (r['t_echo'] + T0_FIG, 0), fontsize=9, color=MUTED,
-                         va='bottom')
-            for _b in (r['t_echo'] + T0_FIG - r['rise'] * 1e3,
-                       r['t_echo'] + T0_FIG + r['rise'] * 1e3):
-                ax1.axvline(_b, color=GRID, lw=1.0, ls=':')
-            if r['causality_ok']:
-                causal_note = (f' — causality residual {r["causality"]:.3f} '
-                               'of peak $|P|$')
-        ax1.axhline(0, color=GRID, lw=.8)
-        ax1.set_ylabel(f'Wave ({USYM})')
-        ax1.set_title(f'The two waves at the {bname}put-bar/specimen '
-                      f'interface{causal_note}'
-                      + ('' if pnl['att'] is not None else '  (LOSSLESS)'),
-                      loc='left', fontsize=10)
-        _pk = max(np.abs(pnl['p']).max(), np.abs(pnl['m']).max()) * SCALE
-        ax1.set_ylim(-1.25 * _pk, 1.55 * _pk)
-        ax1.legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='upper left')
+    # --- what went in ------------------------------------------------------
+    ax0 = axes[0, col]
+    for k, s in enumerate(pnl['sig']):
+        ax0.plot(tt_f, s * SCALE, lw=.9, color=(BLUE, ORANGE, INK)[k % 3],
+                 label=f'gauge {k} at {pnl["x"][k]:.0f} mm (identified)')
+    ax0.set_ylabel(f'Gauge signal ({USYM})')
+    ax0.set_title(f'What was measured — {len(pnl["sig"])} gauges on the '
+                  f'{bname} bar', loc='left', fontsize=11)
+    _g = max(np.abs(s_).max() for s_ in pnl['sig']) * SCALE
+    ax0.set_ylim(-1.3 * _g, 1.35 * _g)
+    ax0.legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
 
-        # --- F = P+M at that bar's own face ---------------------------------
-        ax2 = axes[2, col]
-        if pnl['primary']:
-            for (name, _), col_c, ls in zip(SETS, (INK, BLUE), ('-', '--')):
-                ax2.plot(tt_f, RES[name]['F'] * SCALE, color=col_c, lw=1.0,
-                         ls=ls, label=f'$F = P + M$, {name} positions')
-        else:
-            ax2.plot(tt_f, F_o * SCALE, color=INK, lw=1.0,
-                     label='$F = P + M$, identified positions')
-        ax2.axhline(0, color=GRID, lw=1.0)
-        band = 0.03 * r['amp'] * SCALE
-        ax2.axhspan(-band, band, color=BLUE, alpha=.15,
-                    label='±3 % of peak $|P|$')
-        if pnl['primary'] and IMPACT:
-            ax2.axvline(r['t_open'] + T0_FIG, color=ORANGE, lw=1.1, ls='--')
-            ax2.annotate('  bars part', (r['t_open'] + T0_FIG,
-                                        r['peak'] * SCALE * .6),
+    # --- F = P+M at that bar's own face ------------------------------------
+    ax1 = axes[1, col]
+    if pnl['primary']:
+        for (name, _), col_c, ls in zip(SETS, (INK, BLUE), ('-', '--')):
+            ax1.plot(tt_f, RES[name]['F'] * SCALE, color=col_c, lw=1.0,
+                     ls=ls, label=f'$F = P + M$, {name} positions')
+    else:
+        ax1.plot(tt_f, pnl['F'] * SCALE, color=INK, lw=1.0,
+                 label='$F = P + M$, identified positions')
+    ax1.axhline(0, color=GRID, lw=1.0)
+    band = 0.03 * r['amp'] * SCALE
+    ax1.axhspan(-band, band, color=BLUE, alpha=.15,
+                label='±3 % of peak $|P|$')
+    title = f'F = P + M at the {bname}put-bar/specimen interface'
+    if pnl['primary']:
+        # The echo instant and the clearance held either side of it: the
+        # windows every check above is scored over. They belong on the panel
+        # the checks are about, which is BAR's own force.
+        ax1.axvline(r['t_echo'] + T0_FIG, color=MUTED, lw=1.1, ls='--')
+        # Labelled to the LEFT of its own line: the echo lands near the end of
+        # the record by construction, so a label growing rightward runs off.
+        ax1.annotate('free-end echo arrives, $2L/c$ after the wave left  ',
+                     (r['t_echo'] + T0_FIG, 0), fontsize=9, color=MUTED,
+                     va='bottom', ha='right')
+        for _b in (r['t_echo'] + T0_FIG - r['rise'] * 1e3,
+                   r['t_echo'] + T0_FIG + r['rise'] * 1e3):
+            ax1.axvline(_b, color=GRID, lw=1.0, ls=':')
+        if IMPACT:
+            ax1.axvline(r['t_open'] + T0_FIG, color=ORANGE, lw=1.1, ls='--')
+            ax1.annotate('  bars part', (r['t_open'] + T0_FIG,
+                                         r['peak'] * SCALE * .6),
                          fontsize=9, color=MUTED)
-        ax2.set_xlabel('Time (us)')
-        ax2.set_ylabel(f'Interface force ({UNITS})')
-        title = f'F = P + M at the {bname}put-bar/specimen interface'
-        if pnl['primary']:
-            title += ('' if TENSION else
-                      f' — cannot go negative: residual {r["tensile"]:.3f} '
-                      'of peak')
-            title += '' if ATT is not None else '  (LOSSLESS)'
-        ax2.set_title(title, loc='left', fontsize=10)
+        title += ('' if TENSION else
+                  f' — cannot go negative: residual {r["tensile"]:.3f} '
+                  'of peak')
+        if r['causality_ok']:
+            title += f', causality {r["causality"]:.3f}'
+    title += '' if pnl['att'] is not None else '  (LOSSLESS)'
+    ax1.set_ylabel(f'Interface force ({UNITS})')
+    ax1.set_title(title, loc='left', fontsize=10)
+    ax1.legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
 
-        # --- equilibrium, overlaid on BAR's own F panel on a twin y-axis ---
-        if pnl['primary']:
-            axeq = ax2.twinx()
-            axeq.plot(tt_f, equilibrium, color=EQ_COL, lw=.8,
-                      label=f'|F_{BAR} - F_{OTHER}| / max|F_{BAR}|')
-            for _b in (tt_f[_win.start], tt_f[min(_win.stop, N - 1)]):
-                axeq.axvline(_b, color=EQ_COL, lw=0.9, ls=':')
-            axeq.set_ylim(0, max(4 * float(equilibrium[_win].mean()), 0.05))
-            axeq.set_ylabel('equilibrium residual', color=EQ_COL)
-            axeq.tick_params(axis='y', colors=EQ_COL, labelsize=9)
-            axeq.spines['right'].set_color(EQ_COL)
-            for sp in ('top', 'left', 'bottom'): axeq.spines[sp].set_visible(False)
-            h1, l1 = ax2.get_legend_handles_labels()
-            h2, l2 = axeq.get_legend_handles_labels()
-            ax2.legend(h1 + h2, l1 + l2, frameon=False, fontsize=9,
-                      labelcolor=MUTED, loc='lower left')
-        else:
-            ax2.legend(frameon=False, fontsize=9, labelcolor=MUTED,
-                      loc='lower left')
-        ax2.set_xlim(tt_f[0], tt_f[int(0.95 * N)])
+# --- bottom left: force equilibrium across the interface -------------------
+# Two INDEPENDENT solves of one quantity -- separate gauges, separate solves,
+# sharing only the bar's identified constants -- so where they part company is
+# the honest error bar on the whole reconstruction. Identical panel to
+# identify_bar_tension.py's, and neither curve is shifted: the two faces are a
+# specimen apart.
+if EQ_COLI is not None:
+    axeq = axes[2, EQ_COLI]
+    # Coloured and differenced by BAR NAME, not by which one --bar happened to
+    # make primary, so the panel reads the same way whichever was picked.
+    for _b, _c in (('in', BLUE), ('out', ORANGE)):
+        axeq.plot(tt_f, F_BY[_b] * SCALE, lw=1.0, color=_c,
+                  label=f'$F_{{{_b}}}$ at the {_b}put-bar / specimen face')
+    axeq.plot(tt_f, (F_BY['in'] - F_BY['out']) * SCALE, color=INK, lw=1.1,
+              label='$F_{in} - F_{out}$ (should be 0)')
+    axeq.axhline(0, color=GRID, lw=1.0)
+    axeq.axvspan(tt_f[_win.start], tt_f[min(_win.stop, N - 1)], color=GRID,
+                 alpha=.35, label='mean/max window')
+    axeq.set_xlabel('Time (us)')
+    axeq.set_ylabel(f'Interface force ({UNITS})')
+    axeq.set_title(
+        'Force equilibrium across the specimen — two independent solves of '
+        f'one force:\nmean {equilibrium[_win].mean():.2e}, max '
+        f'{equilibrium[_win].max():.2e} of peak $|F_{{{BAR}}}|$  (the two '
+        'faces are a specimen apart, unshifted)', loc='left', fontsize=10)
+    axeq.legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
 
-    axes_all = axes.flat
+# --- bottom right: the free-end null ---------------------------------------
+# The same record reconstructed at BAR's own far FREE surface instead of at the
+# interface, where the boundary condition demands zero stress. It consumes
+# nothing but this record and the identified numbers, which is what makes it
+# the check that survives contact with a rig -- and it is the one place a
+# calibration carried over from another shot can be caught being wrong.
+axnull = axes[2, NULL_COL]
+_nl = NULL[SETS[0][0]]
+axnull.plot(tt_f, _nl['p'] * SCALE, lw=.9, color=BLUE, label='$P$')
+axnull.plot(tt_f, _nl['m'] * SCALE, lw=.9, color=ORANGE, label='$M$')
+axnull.plot(tt_f, _nl['tot'] * SCALE, color=INK, lw=1.1,
+            label='$P + M$ (should be 0)')
+axnull.axhline(0, color=GRID, lw=1.0)
+axnull.axvspan(tt_f[_nl['w'].start], tt_f[min(_nl['w'].stop, N - 1)],
+               color=GRID, alpha=.35, label='rms/max window')
+axnull.set_xlabel('Time (us)')
+axnull.set_ylabel(f'Stress at free end ({USYM})')
+_verdict = (f'rms {_nl["rms"]:.2e} vs tol {NULL_TOL:.1e} -> '
+            f'{"PASS" if _nl["rms"] <= NULL_TOL else "FAIL"}' if NULL_VALID else
+            f'rms {_nl["rms"]:.2e} — NOT A CHECK: the {BAR} bar reaches the '
+            'free end through the\ninterface, and this is not the shot the '
+            'calibration measured that path on')
+axnull.set_title(
+    f'Free-end null: stress at the {BAR} bar\'s free surface, '
+    f'{_nl["L_free"].min():.0f}-{_nl["L_free"].max():.0f} mm away —\n'
+    + _verdict, loc='left', fontsize=10)
+axnull.legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
+
+axes[0, 0].set_xlim(tt_f[0], tt_f[int(0.95 * N)])
+
+if OTHER is not None:
     _Din = abs(PANEL['in']['x'][1] - PANEL['in']['x'][0])
     _Dout = abs(PANEL['out']['x'][1] - PANEL['out']['x'][0])
     _title = (f'Force at each bar\'s own interface — in: {_Din:.0f} mm gauge '
               f'spacing, out: {_Dout:.0f} mm'
               + ('' if CASE == str(ID['case'])
-                 else f' calibrated on [{str(ID["case"])}]'))
+                 else f'\ncalibrated on [{str(ID["case"])}] — nothing is '
+                      'identified from this record'))
 else:
-    # Single bar identified: the original one-column, three-row layout.
-    fig, axes = plt.subplots(3, 1, figsize=(11, 12), sharex=True)
-    fig.patch.set_facecolor(SURFACE)
-
-    for k, s in enumerate(sig):
-        axes[0].plot(tt_f, s * SCALE, lw=.9,
-                     color=(BLUE, ORANGE, INK)[k % 3],
-                     label=f'gauge {k} at {x_id[k]:.0f} mm (identified)')
-    axes[0].set_ylabel(f'Gauge signal ({USYM})')
-    axes[0].set_title(f'What was measured — {len(sig)} gauges on the {BAR} bar',
-                      loc='left', fontsize=11)
-    _g = max(np.abs(s_).max() for s_ in sig) * SCALE
-    axes[0].set_ylim(-1.3 * _g, 1.35 * _g)
-    axes[0].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
-
-    axes[1].plot(tt_f, r['p'] * SCALE, color=BLUE, lw=.9,
-                 label=r'$P$  (leaving the contact, into the bar)')
-    axes[1].plot(tt_f, r['m'] * SCALE, color=ORANGE, lw=.9,
-                 label=r'$M$  (returning to the contact)')
-    axes[1].axvline(r['t_echo'] + T0_FIG, color=MUTED, lw=1.1, ls='--')
-    axes[1].annotate('  free-end echo arrives, $2L/c$ after the wave left',
-                     (r['t_echo'] + T0_FIG, 0), fontsize=9, color=MUTED,
-                     va='bottom')
-    for _b in (r['t_echo'] + T0_FIG - r['rise'] * 1e3,
-               r['t_echo'] + T0_FIG + r['rise'] * 1e3):
-        axes[1].axvline(_b, color=GRID, lw=1.0, ls=':')
-    axes[1].axhline(0, color=GRID, lw=.8)
-    axes[1].set_ylabel(f'Wave ({USYM})')
-    axes[1].set_title('The two waves separated AT the contact plane — $M$ is '
-                      'flat zero until the echo can get back: causality '
-                      f'residual {r["causality"]:.3f} of peak $|P|$'
-                      + ('' if ATT is not None else '  (LOSSLESS)'),
-                      loc='left', fontsize=10)
-    _pk = max(np.abs(r['p']).max(), np.abs(r['m']).max()) * SCALE
-    axes[1].set_ylim(-1.25 * _pk, 1.55 * _pk)
-    axes[1].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='upper left')
-
-    for (name, _), col, ls in zip(SETS, (INK, BLUE), ('-', '--')):
-        axes[2].plot(tt_f, RES[name]['F'] * SCALE, color=col, lw=1.0, ls=ls,
-                     label=f'$F = P + M$, {name} positions')
-    axes[2].axhline(0, color=GRID, lw=1.0)
-    band = 0.03 * r['amp'] * SCALE
-    axes[2].axhspan(-band, band, color=BLUE, alpha=.15,
-                    label='±3 % of peak $|P|$')
-    if IMPACT:
-        axes[2].axvline(r['t_open'] + T0_FIG, color=ORANGE, lw=1.1, ls='--')
-        axes[2].annotate('  bars part', (r['t_open'] + T0_FIG,
-                                        r['peak'] * SCALE * .6),
-                         fontsize=9, color=MUTED)
-    axes[2].set_xlabel('Time (us)')
-    axes[2].set_ylabel(f'Interface force ({UNITS})')
-    axes[2].set_title(f'THE ANSWER — force at the {IFACE}.'
-                      + (' A bonded joint may carry either sign; the unilateral '
-                         'check does not apply'
-                         if TENSION else
-                         ' It cannot go negative (a dry contact does not pull): '
-                         f'residual {r["tensile"]:.3f} of peak')
-                      + ('' if ATT is not None else '  (LOSSLESS)'),
-                      loc='left', fontsize=10)
-    axes[2].legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
-    axes[2].set_xlim(tt_f[0], tt_f[int(0.95 * N)])
-
-    axes_all = axes
     _title = (f'Force at the {IFACE}, reconstructed from two gauges '
               f'{abs(x_id[1]-x_id[0]):.0f} mm apart on the {BAR} bar'
               + ('' if CASE == str(ID['case'])
-                 else f' calibrated on [{str(ID["case"])}]'))
+                 else f'\ncalibrated on [{str(ID["case"])}] — nothing is '
+                      'identified from this record'))
 
-for ax in axes_all:
+for ax in axes.flat:
     ax.set_facecolor(SURFACE); ax.grid(True, color=GRID, lw=.7, alpha=.8)
     ax.set_axisbelow(True)
     for sp in ('top', 'right'): ax.spines[sp].set_visible(False)
@@ -668,19 +779,25 @@ FIG = (f'{_stem}.png' if ATT is not None else f'{_stem}_lossless.png')
 fig.savefig(FIG, dpi=140, facecolor=fig.get_facecolor())
 print(f'\nwrote {FIG}')
 
+# Three columns and no more: time, and the force at each bar's own face. P, M
+# and the equilibrium residual used to ride along here; they are derived from
+# these (F = P + M, and the residual is their difference over a peak) or shown
+# in the figure, and a reduction file that has to be explained is worse than
+# one that does not. Only the bars actually identified get a column.
 DAT = (f'{_stem}.dat' if ATT is not None else f'{_stem}_lossless.dat')
 T0 = float(d.get('t0_file', 0.0))
-_cols = [tt + T0, RES[SETS[0][0]]['F'], RES[SETS[0][0]]['p'], RES[SETS[0][0]]['m']]
-_header = f'time[us]  F_interface[{UNITS}]  P[{UNITS}]  M[{UNITS}]'
-if OTHER is not None:
-    _cols += [F_o, equilibrium]
-    _header += f'  F_{OTHER}[{UNITS}]  equilibrium'
+_cols = [tt + T0] + [F_BY[b] for b in DAT_BARS]
+_header = 'time[us]  ' + '  '.join(
+    f'F_{b}[{UNITS}]' for b in DAT_BARS)
+_geom = '\n'.join(
+    f'F_{b}: {b} bar, c0={float(ID[f"c_{b}"]):.3f} mm/ms, '
+    f'x={[round(float(v), 2) for v in np.asarray(ID[f"x_{b}"], float)]} mm, '
+    f'reconstructed at ITS OWN face (x=0)' for b in DAT_BARS)
 np.savetxt(DAT, np.column_stack(_cols),
            header=_header + '\n'
                   f'time is the SOURCE FILE\'s own base (analysis t=0 sits at '
                   f'{T0:.1f} us there)\n'
-                  f'{BAR} bar, c0={c0:.3f} mm/ms, x={[round(float(v), 2) for v in x_id]} mm, '
-                  f'eta={eta:g}, x=0 is the {IFACE}')
-print(f'wrote {DAT}')
+                  + _geom + f'\neta={eta:g}, x=0 is the {IFACE}')
+print(f'wrote {DAT}: {", ".join(["time"] + [f"F_{b}" for b in DAT_BARS])}')
 
 plotting.show_unless(HEADLESS)

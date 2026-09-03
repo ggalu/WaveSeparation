@@ -58,6 +58,19 @@ GENERATED=(
     "interface_force_experiment_pc_specimen.dat"
     "interface_force_experiment_pc_specimen_lossless.png"
     "interface_force_experiment_pc_specimen_lossless.dat"
+    # written by reconstruct_interface_direct.py -- no identification step,
+    # c0 from the gauge-to-gauge transit time
+    "interface_force_direct_experiment_tension_bar_2.png"
+    "interface_force_direct_experiment_tension_bar_2.dat"
+    # same two scripts, --case SHTB_PC: a real specimen shot, calibrated on
+    # experiment_tension_bar_2
+    "interface_force_SHTB_PC.png"
+    "interface_force_SHTB_PC.dat"
+    "interface_force_direct_SHTB_PC.png"
+    "interface_force_direct_SHTB_PC.dat"
+    # figures written by identify_bar_tension_manual.py, one per case
+    "bar_manual_experiment_tension_bar_2.png"
+    "bar_manual_SHTB_PC.png"
     # figures written by plot_gauges_at_interface.py, one per case
     "gauges_at_interface.png"
     "gauges_at_interface_experiment_pc_specimen.png"

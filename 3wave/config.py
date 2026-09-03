@@ -36,7 +36,8 @@ __all__ = ['load', 'bar_lengths', 'CASES', 'EXPERIMENT_CASES', 'BAR_TABLES',
 # the bar already did the integrating. _validate skips those checks for them
 # and keeps the ones that still mean something.
 EXPERIMENT_CASES = ('experiment_pc_bar', 'experiment_pc_specimen',
-                    'experiment_tension_bar', 'experiment_tension_bar_2')
+                    'experiment_tension_bar', 'experiment_tension_bar_2',
+                    'SHTB_PC')
 
 CASES = ('compression', 'calibration_compression',
          'tension', 'calibration_tension') + EXPERIMENT_CASES
@@ -185,6 +186,16 @@ def _validate_experiment(cfg, where):
     if cfg['analysis']['eta'] <= 0:
         raise ValueError(f'{where}: eta must be > 0 (separate() is singular '
                          'at DC for eta = 0)')
+
+    # A specimen shot that identifies nothing of its own -- c0, positions and
+    # alpha(f) all come from a calibration run on a different case. `requires`
+    # names that case, so reconstruct_interface.py can refuse to reuse the
+    # wrong bar_identified.npz instead of silently reporting numbers that were
+    # never measured on this rig.
+    requires = cfg.get('requires')
+    if requires is not None and requires not in EXPERIMENT_CASES:
+        raise ValueError(f'{where}: "requires" names {requires!r}, which is '
+                         f'not one of {EXPERIMENT_CASES}')
 
     for key in ('file', 'columns'):
         if key not in cfg:

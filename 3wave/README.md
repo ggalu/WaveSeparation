@@ -1545,8 +1545,30 @@ Unprompted, and none of it built in:
 `identify_bar_compression.py` writes `bar_identified.npz` and
 `reconstruct_interface.py` reads it — the same producer/consumer split the
 simulators use, so iterating on the reconstruction does not mean re-running the
-identification. The reconstruction also writes `interface_force.dat`
-(time, F, P, M). `--no-attenuation` reproduces the lossless column above.
+identification. The reconstruction also writes `interface_force.dat`, three
+columns and no more — **time, `F_in`, `F_out`**, each bar's force at its own
+face — with `c0`, the positions and the time base in the header. `P` and `M`
+are not in it: `F = P + M`, and the equilibrium residual is the difference of
+the two columns over a peak, so both are one subtraction away and the figure
+already draws them. `--no-attenuation` reproduces the lossless column above.
+
+The figure carries the same rows as the identification's, minus its
+matched-filter edge row — there is nothing to time on a specimen shot, because
+a specimen is exactly what destroys the edges:
+
+| | left column | right column |
+|---|---|---|
+| row 0 | what was measured, input bar | …output bar |
+| row 1 | `F = P + M` at the input-bar face | …at the output-bar face |
+| row 2 | force equilibrium across the interface | the free-end null |
+
+With a single bar identified the columns collapse to one and only the null is
+drawn. Everything the reconstruction needs — `c0`, the gauge positions,
+`α(f)`, `c_p(f)`, and each gauge's distance to its bar's free surface — comes
+out of `bar_identified.npz`, so **nothing is identified from the record being
+reduced**. That is the point on a real shot, and it is why the free-end null is
+the panel to read first: a calibration carried over from another shot can be
+stale, and the null is the one panel whose answer is known in advance.
 
 ### Why the force does not go to zero when the striker unloads
 
@@ -1609,8 +1631,9 @@ echo returns leaves its staircase edges in the record alongside the echo.
 
 Between ~1200 and ~1400 µs the force declines from 0.97 to about 0.83 kN. It
 looks like a second staircase step and it is not — $2P$ is 1888 µs, and nothing
-from the PC bar can return before 1460. Splitting `interface_force.dat` into its
-two waves settles it:
+from the PC bar can return before 1460. Splitting the reconstruction into its
+two waves settles it (`P` and `M` as the figure's own panels draw them — the
+`.dat` carries the two interface forces only):
 
 | t [µs] | `P` | `M` | `F = P + M` |
 |---|---|---|---|
@@ -1898,7 +1921,7 @@ specimen reduction, which is what the floor is actually made of.
 | `experiment.py` | Loads a MEASURED shot into the same dict shape `dump.npz` produces — column map, baseline removal, trim to the first arrival. No ground-truth keys: it has none and must not invent any. |
 | `identify_attenuation.py` | `α(f)` and `c_p(f)` from two gauges on the same bar, by the transfer function between them. Magnitudes only — no boundary condition — so the free-end null stays an independent check of it. A module; `identify_bar_compression.py` and `reconstruct_interface.py` both use it. |
 | `plot_gauges_at_interface.py` | Each gauge shifted to `x = 0` alone (`backpropagate`) against the two-gauge separation, with each gauge's single-wave window `2(L-d)/c0`. Shows how much of a record needed two gauges, and what one gauge would have claimed past that. |
-| `reconstruct_interface.py` | **The deliverable for a real shot:** force at the impact interface, `F = P + M`, plus the four checks — free-end null, causality, unilateral contact, separation. Runs the identified and tape positions side by side. `--no-attenuation` for the lossless comparison. |
+| `reconstruct_interface.py` | **The deliverable for a real shot:** force at the impact interface, `F = P + M`, plus the four checks — free-end null, causality, unilateral contact, separation. Identifies nothing itself: `c0`, positions, `α(f)`, `c_p(f)` and the free-end distances all come from `bar_identified.npz`. Runs the identified and tape positions side by side. `--no-attenuation` / `--no-dispersion` for the lossless comparison. |
 | `identify_bar_tension.py` | Recovers gauge positions, spacing `D` and `c0` from that shot's echo train. Needs one measured length, and `c0_route` picks which: `L_free_ref` in `config.toml` (or `--l-free-ref`) by default, the out-bar gauge spacing under `"out_echo_diff"` — that route reads two entries of the configured gauge list and nothing else from it. |
 | `reduce_specimen.py` | Full chain: gauges → specimen stress/strain, validated against the simulator's own measurement. `--headless` to skip the window. |
 | `lagrange_diagram.py` | The separated waves as x-t FIELDS across the whole assembly, from the ordinary dump. Prints the gauge round trip, the free-surface null and the interface force as numbers. |

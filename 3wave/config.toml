@@ -708,3 +708,73 @@ snr = 0.01                        # keep bins whose |F1| is above this fraction
 [experiment_tension_bar_2.null]
 window = 0.75
 tol = 2.5e-3
+
+# --------------------------------------------------------------------------
+# The SAME rig as [experiment_tension_bar_2], with a real specimen (polycarbonate)
+# between the two bars in place of the 23 mm bar-material coupler.
+#
+#   python3 identify_bar_tension.py --experiment experiment_tension_bar_2  # once
+#   python3 reconstruct_interface.py --case SHTB_PC
+#
+# NOTHING IS IDENTIFIED FROM THIS SHOT, exactly as [experiment_pc_specimen] is to
+# [experiment_pc_bar]: c0, the gauge positions, alpha(f) and c_p(f) are properties
+# of the BARS, measured once on [experiment_tension_bar_2] and reused here.
+# `requires` names that case; reconstruct_interface.py checks bar_identified.npz
+# was actually built from it and refuses to run on a stale identification.
+#
+# x = 0 is each bar's own face, exactly as on the calibration shot -- the
+# specimen sits between the two faces without moving either one. The tape
+# gauges are therefore unchanged from [experiment_tension_bar_2]: confirmed by
+# the rig operator that the bars/gauges were not touched between the two shots,
+# only the coupler was swapped for the specimen.
+#
+# The input bar carries the full incident+reflected pulse (peaks ~17.6 kN); the
+# output bar carries only what the specimen transmits (~1.85 kN, ~10x down) --
+# consistent with a soft polycarbonate specimen between stiff aluminium bars.
+# --------------------------------------------------------------------------
+[SHTB_PC]
+requires = "experiment_tension_bar_2"
+loading = "tension"
+file = "data/SHTB_PC_2026-09-03.txt"
+units = "N"
+interface = "specimen"
+
+gauges = [935.00, 119.00, 119.00, 1199.00]  # tape, carried over unchanged from
+                                             # [experiment_tension_bar_2] -- see
+                                             # note above
+
+[SHTB_PC.columns]
+time = 0
+"in-0"  = 1                       # force_in1 [N], 935 mm from the interface
+"in-1"  = 2                       # force_in2 [N], 119 mm from the interface
+"out-0" = 3                       # force_out1 [N], 119 mm from the interface
+"out-1" = 4                       # force_out2 [N], 1199 mm from the interface
+
+[SHTB_PC.input_bar]
+L_input = 2760.0                  # same bar as [experiment_tension_bar_2]
+diameter = 16.0
+
+[SHTB_PC.output_bar]
+L_output = 2777.0                 # same bar as [experiment_tension_bar_2]
+diameter = 16.0
+
+[SHTB_PC.specimen]                # polycarbonate, rectangular cross-section --
+length = 8.0                      # NOT read by reconstruct_interface.py (E, A
+                                   # and rho never enter that solve); recorded
+                                   # here for reduce_specimen.py and for anyone
+                                   # reading this file. Cross-section 3 x 8 mm
+                                   # (not circular, so no "diameter" key here).
+
+[SHTB_PC.trim]
+threshold = 0.05
+lead = 900.0                      # this record has ~990 us of pre-trigger
+                                   # baseline to spare, checked directly on
+                                   # the file
+baseline = true
+
+[SHTB_PC.null]
+window = 0.75
+# Provisional -- copied from [experiment_tension_bar_2.null], per that case's
+# own convention of quoting a measured floor rather than a guess. Re-measure
+# once the pipeline has run once on this shot.
+tol = 2.5e-3

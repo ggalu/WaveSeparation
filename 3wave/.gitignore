@@ -26,6 +26,14 @@ bar_identification_experiment_pc_bar.png
 bar_identification_experiment_tension_bar_2.png
 bar_equilibrium_experiment_tension_bar_2.dat
 bar_equilibrium_experiment_tension_bar_2.png
+interface_force_direct_experiment_tension_bar_2.dat
+interface_force_direct_experiment_tension_bar_2.png
+interface_force_SHTB_PC.dat
+interface_force_SHTB_PC.png
+interface_force_direct_SHTB_PC.dat
+interface_force_direct_SHTB_PC.png
+bar_manual_experiment_tension_bar_2.png
+bar_manual_SHTB_PC.png
 gauges_at_interface.png
 
 # superseded output formats, in case an older revision is ever run here
