@@ -62,9 +62,11 @@ Geometry and units (mm, ms, kg => kN, GPa; mm/ms == m/s):
                           the stored data, for specimen_response(loading=...)
     eta                   the analysis exponential window [1/ms], from config
 
-Present only when record_full_field is set in config.toml:
+Present only when record_full_field is set in the case's [numerics]:
     eps_full, force_full  (N_x, N) float32
 """
+
+import os
 
 import numpy as np
 
@@ -73,8 +75,11 @@ __all__ = ['write_dump', 'load_dump', 'DUMP_FILE']
 DUMP_FILE = 'dump.npz'
 
 
-def write_dump(sim, cfg, path=DUMP_FILE):
-    """Collect a finished simulator's recorded output into one .npz."""
+def write_dump(sim, cfg, path=None):
+    """Collect a finished simulator's recorded output into one .npz -- by
+    default DUMP_FILE in the case's own folder."""
+    if path is None:
+        path = os.path.join(cfg['case_dir'], DUMP_FILE)
     fields = dict(sim.rec.as_dump())
     fields.update(
         E_in=sim.E_bar, E_out=sim.E_outbar,
@@ -87,6 +92,7 @@ def write_dump(sim, cfg, path=DUMP_FILE):
         v0_in=sim.v0_in, v0_out=sim.v0_out,
         loading=sim.loading, eta=cfg['analysis']['eta'],
         spec_strain=sim.epsS, spec_stress=sim.sigS,
+        case=cfg.get('case', ''),
     )
     np.savez(path, **fields)
 
@@ -98,12 +104,12 @@ def write_dump(sim, cfg, path=DUMP_FILE):
           f"planes at x = {fields['X_IN']} and {fields['X_OUT']} mm")
     if 'eps_full' in fields:
         print(f"  full field INCLUDED: {fields['eps_full'].shape} "
-              "(record_full_field is on in config.toml)")
+              "(record_full_field is on in the case's [numerics])")
 
 
-def load_dump(path=DUMP_FILE):
+def load_dump(path):
     """
-    Read dump.npz into a plain dict, with the scalars already unwrapped.
+    Read a dump.npz (normally cases.load_record's business) into a plain dict, with the scalars already unwrapped.
 
     np.load returns every scalar as a 0-d array, which then has to be cast at
     every use site. Doing it once here is what lets the analysis scripts open
@@ -133,5 +139,6 @@ def load_dump(path=DUMP_FILE):
     for k in ('N', 'iface_in', 'iface_out'):
         d[k] = int(d[k])
     d['loading'] = str(d['loading'])
+    d['case'] = str(d.get('case', ''))
     d['t'] = np.arange(d['N']) * d['dt']
     return d

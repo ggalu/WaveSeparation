@@ -1,8 +1,8 @@
 """
 Lagrange (x-t) diagram of the SEPARATED waves, across the whole assembly.
 
-    python3 drive_tension.py
-    python3 lagrange_diagram.py [--headless]
+    python3 simulate.py cases/simulations/tension
+    python3 lagrange_diagram.py cases/simulations/tension [--headless]
 
 Every other figure in this folder shows the separated waves as time series at
 one plane. This one shows them as FIELDS: each bar is separated from its own
@@ -71,6 +71,7 @@ import plotting
 # pyplot is imported, so both happen up here -- see plotting.py.
 _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+_ap.add_argument('case', help='a simulation folder under cases/simulations/ (run simulate.py on it first)')
 _ap.add_argument('--x-step', type=float, default=8.0, metavar='MM',
                  help='spacing of the reconstruction stations [mm]. Snapped to '
                       'a whole number of elements. Default 8.')
@@ -86,10 +87,15 @@ _ap.add_argument('--chunk', type=int, default=64, metavar='N',
                       'Default 64.')
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
-from dump import load_dump
+import cases
+import config
 from wave_separation import separate_field
 
-d = load_dump()
+cfg = config.load(ARGS.case)
+if cfg['kind'] != 'simulation':
+    raise SystemExit(f'{ARGS.case} has kind = "{cfg["kind"]}"; this script reads '
+                     'a simulation dump -- give a cases/simulations/ folder')
+d = cases.record(cfg)
 # Per bar: the two are separated independently and, on the compression case,
 # are not even the same material. Every call below takes the c0 of whichever
 # bar it is reconstructing in.
@@ -107,7 +113,7 @@ if n_in < 2 or n_out < 2:
     raise SystemExit(
         f'separation needs two gauges per bar; this dump has {n_in} on the '
         f'input bar and {n_out} on the output bar. Add a second entry to '
-        '`gauges` in config.toml and re-run the driver. A single gauge leaves '
+        '`gauges` in the case.toml and re-run simulate.py. A single gauge leaves '
         'P and M under-determined -- see "A consequence worth knowing" in '
         'README.md.')
 
@@ -385,8 +391,8 @@ _note = textwrap.fill(
 fig.text(.007, -.012, _note, ha='left', va='top', fontsize=8.5, color=MUTED,
          linespacing=1.5, transform=fig.transFigure)
 
-fig.savefig('lagrange_diagram.png', dpi=140, facecolor=fig.get_facecolor(),
-            bbox_inches='tight')
-print('\nwrote lagrange_diagram.png')
+FIG = cases.output(cfg, 'lagrange_diagram.png')
+fig.savefig(FIG, dpi=140, facecolor=fig.get_facecolor(), bbox_inches='tight')
+print(f'\nwrote {cases.rel(FIG)}')
 
 plotting.show_unless(HEADLESS)

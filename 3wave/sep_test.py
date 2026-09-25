@@ -9,15 +9,25 @@ The measure is the reconstructed interface force against the force the simulator
 actually carried in the bar element at each specimen face, which the dump stores
 as ground truth.
 
-    python3 drive_tension.py    (or drive_compression.py)
-    python3 sep_test.py
+    python3 simulate.py cases/simulations/tension
+    python3 sep_test.py cases/simulations/tension
 """
 import numpy as np
 
-from dump import load_dump
+import argparse
+
+import cases
+import config
 from wsep import wave_separation
 
-d = load_dump()
+_ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
+_ap.add_argument('case', help='a simulation folder under cases/simulations/ (run simulate.py on it first)')
+ARGS = _ap.parse_args()
+cfg = config.load(ARGS.case)
+if cfg['kind'] != 'simulation':
+    raise SystemExit(f'{ARGS.case} has kind = "{cfg["kind"]}"; this script reads '
+                     'a simulation dump -- give a cases/simulations/ folder')
+d = cases.record(cfg)
 dt, t = d['dt'], d['t']
 NFFT = 1 << 18
 fmax = 1.0 / dt
@@ -26,7 +36,7 @@ fmax = 1.0 / dt
 # a time, in MATLAB's argument order.
 if d['eps_in'].shape[0] != 3:
     raise SystemExit(f"wsep.py is hardwired to three gauges per bar; the dump "
-                     f"has {d['eps_in'].shape[0]}. Adjust config.toml, or use "
+                     f"has {d['eps_in'].shape[0]}. Adjust the case's gauges, or use "
                      f"wave_separation.separate, which takes any number.")
 
 # skip the very first instants, and stop before the record ends

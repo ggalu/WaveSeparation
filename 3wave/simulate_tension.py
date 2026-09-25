@@ -3,9 +3,9 @@
 1D Split Hopkinson TENSION Bar (SHTB) with a tubular striker.
 
 Companion to simulate_compression.py, which is a direct-impact COMPRESSION bar. Same lumped
-mass-spring chain, same explicit leapfrog, same output contract -- so drive_compression.py's
-sibling drive_tension.py produces .npy dumps the existing reduction scripts read
-without modification.
+mass-spring chain, same explicit leapfrog, same output contract -- so simulate.py writes the
+same dump.npz from either one, and the reduction scripts read it without
+modification.
 
 --------------------------------------------------------------------------
 How a striker makes a tensile pulse
@@ -64,6 +64,8 @@ Differences from simulate_compression.py that matter downstream
 Units: mm, ms, kg  =>  kN, GPa, and mm/ms (numerically equal to m/s).
 """
 
+import os
+
 import numpy as np
 
 import config as _config
@@ -72,16 +74,26 @@ from recording import GaugeRecorder
 
 class SimulateSHTB:
     """
-    Parameters come from the [tension] case of config.toml -- see that file for
-    what each one means. Pass a config dict to override, e.g. for a sweep:
+    Parameters come from a simulation case's case.toml (model = "tension") --
+    see cases/simulations/tension/ for what each one means. Pass a config
+    dict to override, e.g. for a sweep:
 
-        cfg = config.load('tension')
+        cfg = config.load('cases/simulations/tension')
         cfg['striker']['length'] = 1500.0
         sim = SimulateSHTB(cfg)
     """
 
+    def _out(self, name):
+        """`name` in this case's folder; the working directory for a
+        hand-built config with no case_dir."""
+        return os.path.join(self.cfg.get('case_dir', '.'), name)
+
     def __init__(self, cfg=None):
-        cfg = _config.load('tension') if cfg is None else cfg
+        if cfg is None:
+            raise TypeError(
+                'SimulateSHTB needs a loaded case config, e.g. '
+                "config.load('cases/simulations/tension')" + '; there is '
+                'no default case any more')
         self.cfg = cfg
         in_bar, out_bar, spec = cfg['input_bar'], cfg['output_bar'], cfg['specimen']
         strk, anv, num = cfg['striker'], cfg['anvil'], cfg['numerics']
@@ -98,7 +110,7 @@ class SimulateSHTB:
 
         # --- materials -----------------------------------------------------
         # The two bars come from separate tables even though a conventional SHTB
-        # uses the same stock for both -- see config.toml. E_bar / rho_bar keep
+        # uses the same stock for both -- see case.toml. E_bar / rho_bar keep
         # their names as the INPUT bar, which is what this model's striker,
         # anvil and timestep all hang off.
         self.E_bar, self.rho_bar = in_bar['E'], in_bar['rho']        # 7075-T6 Al
@@ -157,7 +169,7 @@ class SimulateSHTB:
         # same chain: x = 0 is now the anvil's OUTER face, not the bar's end.
         self.L = (self.L_anvil + self.L_inputbar + self.L_specimen
                   + self.L_outputbar)
-        dx = self.dx_target      # element length, from config.toml
+        dx = self.dx_target      # element length, from case.toml
         self.N_x = int(round(self.L / dx))
         self.x = np.linspace(0, self.L, self.N_x + 1)
         self.v = np.zeros_like(self.x)
@@ -236,7 +248,7 @@ class SimulateSHTB:
         self.k_contact = self.E_pom * self.A_striker / self.dx0
 
     def initialize_time_discretization(self):
-        # c0 is the BAR wave speed -- it is what drive_tension.py writes to
+        # c0 is the BAR wave speed -- it is what dump.write_dump writes to
         # meta.npz and what the reduction uses. The striker and anvil have their
         # own, and the fastest of the three sets the stable timestep.
         self.c0 = np.sqrt(self.E_bar / self.rho_bar)
@@ -256,7 +268,7 @@ class SimulateSHTB:
 
     def initialize_history_arrays(self):
         # Only the gauge rows, the two interface elements and the specimen means
-        # are kept; see recording.py. The full field is opt-in via config.toml.
+        # are kept; see recording.py. The full field is opt-in via case.toml.
         self.rec = GaugeRecorder(
             self.specimenIndices, self.dx0, self.L, self.gauge_distances,
             self.num_timesteps, self.N_x,
@@ -356,11 +368,13 @@ class SimulateSHTB:
         self.epsS = self.rec.spec_strain
         self.forceS = self.rec.spec_force
         self.sigS = self.forceS / self.specimen_cross_section_area
-        np.savetxt("specimen.dat", np.column_stack((self.T, self.sigS, self.epsS)),
+        np.savetxt(self._out("specimen.dat"), np.column_stack((self.T, self.sigS, self.epsS)),
                    header="time[ms]  mean specimen stress[GPa]  mean specimen strain[-]"
                           "  (TENSION POSITIVE)")
-        print("... wrote specimen.dat")
+        print(f"... wrote {self._out('specimen.dat')}")
 
 
 if __name__ == "__main__":
-    simulator = SimulateSHTB()
+    raise SystemExit('This module writes no dump. Run a simulation case '
+                     'through simulate.py instead:\n'
+                     '    python3 simulate.py cases/simulations/tension')

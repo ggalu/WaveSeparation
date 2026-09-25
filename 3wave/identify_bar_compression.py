@@ -3,9 +3,11 @@ Identify gauge positions, gauge spacing and wave speed for a DIRECT-IMPACT
 compression bar, from a calibration shot with no specimen -- the two bar faces
 struck straight against each other.
 
-    python3 drive_calibration_compression.py
-    python3 identify_bar_compression.py [--headless]
-    python3 identify_bar_compression.py --l-in-ref 2000.0 --l-out-ref 1000.0
+    python3 simulate.py cases/simulations/calibration_compression
+    python3 identify_bar_compression.py cases/identifications/calibration_compression [--headless]
+    python3 identify_bar_compression.py cases/identifications/calibration_compression \
+        --l-in-ref 2000.0 --l-out-ref 1000.0
+    python3 identify_bar_compression.py cases/identifications/pc_bar  # a measured shot
 
 Companion to identify_bar_tension.py, which does the same for the SHTB. The
 method is the same in spirit -- time EDGES on the differentiated record, never
@@ -78,30 +80,33 @@ _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 _ap.add_argument('--l-in-ref', type=float, metavar='MM', dest='L_in_ref',
                  help='input bar length, struck face -> free end [mm]. '
-                      'Overrides L_free_in_ref in config.toml.')
+                      'Overrides L_free_in_ref in case.toml.')
 _ap.add_argument('--l-out-ref', type=float, metavar='MM', dest='L_out_ref',
                  help='output bar length, struck face -> free end [mm]. '
-                      'Overrides L_free_out_ref in config.toml.')
+                      'Overrides L_free_out_ref in case.toml.')
 _ap.add_argument('--l-free-ref-tol', type=float, metavar='MM',
                  dest='L_free_ref_tol',
                  help='what the tape is good to [mm], applied to both bars.')
-_ap.add_argument('--experiment', metavar='CASE', default=None,
-                 help='identify a MEASURED shot named by a config case '
-                      '(e.g. experiment_pc_bar) instead of the simulated '
-                      'calibration dump. There is no ground truth then, so the '
-                      'true/error columns print a dash.')
+_ap.add_argument('case',
+                 help='an identification folder (kind = "identification", '
+                      'method = "compression"): a measured `data` record, or a '
+                      '`simulation` whose dump.npz is read. A measured shot has '
+                      'no ground truth, so the true/error columns print a dash.')
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
+import cases
 import config
-from dump import load_dump
 from wave_separation import separate
 
-CASE = ARGS.experiment or 'calibration_compression'
-EXPERIMENT = CASE in config.EXPERIMENT_CASES
-cfg = config.load(CASE)
+cfg = config.load(ARGS.case)
+if cfg['kind'] != 'identification' or cfg['method'] != 'compression':
+    raise SystemExit(f'{ARGS.case}: identify_bar_compression.py needs an '
+                     'identification folder with method = "compression"')
+CASE = cfg['case']
+EXPERIMENT = config.measured(cfg)
 
 # The two measured lengths -- one per bar, because the two bars are
-# acoustically independent once they separate. config.toml is their durable
+# acoustically independent once they separate. case.toml is their durable
 # home; the flags exist so their influence can be swept without editing it.
 # Absent from both, the script falls back to the model's own geometry, which a
 # simulation can supply and a rig cannot: that is the self-check mode.
@@ -163,11 +168,7 @@ def _rise_time(g, dt):
 # --------------------------------------------------------------------------
 # load
 # --------------------------------------------------------------------------
-if EXPERIMENT:
-    from experiment import load_experiment
-    d = load_experiment(CASE)
-else:
-    d = load_dump()
+d = cases.record(cfg)
 t, dt, N = d['t'], d['dt'], d['N']
 
 if d['loading'] != 'compression':
@@ -177,8 +178,9 @@ if d['loading'] != 'compression':
 if d['L_specimen'] != 0.0:
     raise SystemExit(
         f"this dump has a {d['L_specimen']:.0f} mm specimen between the bars; "
-        "the identification\nassumes they are struck face to face. Run "
-        "drive_calibration_compression.py.")
+        "the identification\nassumes they are struck face to face. Identify a "
+        "no-specimen shot, e.g.\n    python3 simulate.py "
+        "cases/simulations/calibration_compression")
 
 # WHICH BARS ARE IDENTIFIABLE is a property of the record, not of the rig. A bar
 # needs two gauges before `separate` has two equations for two unknowns, and a
@@ -379,7 +381,7 @@ for b in BARS:
             raise SystemExit(
                 f'{b} bar: no reference length. A measured shot has no model '
                 f'geometry to fall\nback on, so L_free_{b}_ref must be in '
-                f'config.toml or given as --l-{b}-ref. One\nlength per bar is '
+                f'case.toml or given as --l-{b}-ref. One\nlength per bar is '
                 'the irreducible minimum -- see "Two bars, two scales" above.')
         L_ref, src = TRUE_L[b], 'model geometry -- nothing configured, SELF-CHECK'
     else:
@@ -556,7 +558,7 @@ if EXPERIMENT and 'attenuation' in cfg:
 # "The free-end null test" in README.md.
 # One threshold PER BAR: the two are different materials and their floors
 # differ by 3x, so a single number would either pass everything on one bar or
-# fail everything on the other. config.toml carries both, with the measured
+# fail everything on the other. case.toml carries both, with the measured
 # floors that set them.
 # An experiment case carries one [.null] table -- one instrumented bar, one
 # threshold -- where a simulated two-bar case carries null_tol_in / null_tol_out.
@@ -669,7 +671,7 @@ if _P and _L_in and 'in' in SKIPPED:
 # The TAPE positions travel with it and are kept SEPARATE from the identified
 # ones. They are two independent measurements of the same thing and the point
 # downstream is to run both and compare, not to have quietly chosen one here.
-IDENT_FILE = 'bar_identified.npz'
+IDENT_FILE = cases.output(cfg, cases.IDENT_FILE)
 _out = dict(case=CASE, bars=np.array(BARS))
 for b in BARS:
     i = ID[b]
@@ -686,7 +688,7 @@ for b in BARS:
     if ATT[b] is not None:
         _out[f'alpha_f_{b}'], _out[f'alpha_{b}'] = ATT[b]
 np.savez(IDENT_FILE, **_out)
-print(f'\nwrote {IDENT_FILE}: '
+print(f'\nwrote {cases.rel(IDENT_FILE)}: '
       + ', '.join(f'{b} c0={ID[b]["c"]:.1f}' for b in BARS)
       + (', with alpha(f)' if any(ATT[b] is not None for b in BARS) else ''))
 
@@ -789,9 +791,8 @@ fig.suptitle('Direct-impact bar identified from a no-specimen calibration shot'
                 else ''),
              x=.006, ha='left', fontsize=13, color=INK)
 fig.tight_layout(rect=(0, 0, 1, .975))
-FIG = (f'bar_identification_{CASE}.png' if EXPERIMENT
-       else 'bar_identification_compression.png')
+FIG = cases.output(cfg, 'bar_identification.png')
 fig.savefig(FIG, dpi=140, facecolor=fig.get_facecolor())
-print(f'\nwrote {FIG}')
+print(f'\nwrote {cases.rel(FIG)}')
 
 plotting.show_unless(HEADLESS)

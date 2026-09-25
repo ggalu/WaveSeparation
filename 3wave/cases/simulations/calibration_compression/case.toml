@@ -1,0 +1,55 @@
+# kind = "simulation": a model to integrate.
+#
+#   python3 simulate.py cases/simulations/calibration_compression
+#
+# writes dump.npz (and the specimen ground truth, specimen.dat) into this folder.
+kind = "simulation"
+model = "compression"
+
+# ==========================================================================
+# CALIBRATION (COMPRESSION): the two bars struck face to face, NO specimen.
+# Run through simulate_compression.py by simulate.py, and identified in
+# cases/identifications/calibration_compression by identify_bar_compression.py -- see "Calibrating a direct-impact
+# bar" in README.md.
+#
+# The tension rig needs a threaded coupler to join its bars; this one needs
+# nothing. The input bar simply arrives at the output bar face and the two
+# touch, so `specimen.length = 0` is literal rather than a stand-in, and the
+# contact plane is a single unilateral face rather than the two a loose
+# specimen has.
+#
+# It is EASIER to read than the tension calibration, and for one reason: both
+# far ends are genuinely free. Each bar therefore rings on its own round trip
+# 2 L / c, that round trip appears directly in the record, and the length that
+# closes the scale is the BAR'S OWN LENGTH rather than a gauge-to-free-end
+# distance nobody can reach with a tape. One per bar, because the two bars are
+# different materials with different wave speeds and are acoustically
+# independent once they separate.
+# ==========================================================================
+loading = "compression"
+gauges = [130.0, 530.0]           # the layout being calibrated. The identify
+                                  # script is never told these and recovers them
+
+[numerics]
+ncyc = 6                          # ~6 input-bar and ~3 output-bar round trips,
+                                  # so every echo used below is in the record
+
+[input_bar]     # same bars as simulations/compression
+E = 70.0
+rho = 2.7e-6
+diameter = 16.0
+L_input = 2000.0
+initial_velocity = 10.0
+
+[output_bar]    # polycarbonate, as in simulations/compression
+E = 2.3
+rho = 1.2e-6
+diameter = 16.0
+L_output = 1000.0
+
+[specimen]
+# NO SPECIMEN. Zero is literal: the mesh puts no element between the bars, the
+# two interface planes coincide on the contact plane, and the unilateral
+# condition is the single face where the bars actually touch. Every other
+# specimen key is meaningless at zero length and may be omitted.
+length = 0.0

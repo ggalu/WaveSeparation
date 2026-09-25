@@ -50,7 +50,7 @@ class GaugeRecorder:
             Sizes of the run.
         record_full_field : bool
             Also keep the every-element/every-timestep arrays (the old
-            behaviour). Expensive; see config.toml.
+            behaviour). Expensive; see case.toml.
         bar_indices : (input_elements, output_elements), optional
             ELEMENT indices of the two bars, used to record how far the UNIFORM
             bar material actually extends from each interface. That is not the

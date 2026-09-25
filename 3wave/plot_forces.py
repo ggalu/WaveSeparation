@@ -6,9 +6,9 @@ This is raw signal inspection -- it does NOT run the wave separation. Its job is
 to show what the gauges actually record, and in particular WHEN the two
 counter-propagating waves start to overlap at each gauge.
 
-Run drive_compression.py or drive_tension.py first to produce dump.npz, then:
-    python3 plot_forces.py              # shows the figure in a window
-    python3 plot_forces.py --headless   # writes the .png only, no window
+Run simulate.py on a simulation folder first to produce its dump.npz, then:
+    python3 plot_forces.py cases/simulations/tension              # window
+    python3 plot_forces.py cases/simulations/tension --headless   # .png only
 
 The figure is always written to gauge_forces.png either way. --headless is also
 implied by MPL_HEADLESS=1 or by there being no display, so the script is safe to
@@ -18,17 +18,27 @@ Works with either simulator: the loading sense comes from the dump, so
 compression data is plotted compression-positive and tension data
 tension-positive.
 """
+import argparse
+
 import numpy as np
 
 import plotting
-HEADLESS = plotting.init(__doc__)     # picks the backend; must precede pyplot
+_ap = argparse.ArgumentParser(
+    description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+_ap.add_argument('case', help='a simulation folder under cases/simulations/ (run simulate.py on it first)')
+HEADLESS, ARGS = plotting.init(parser=_ap)   # picks the backend; precedes pyplot
 import matplotlib.pyplot as plt
 
-from dump import load_dump
+import cases
+import config
 
 # --- load ------------------------------------------------------------------
 # see dump.py for the full definition of each entry
-d = load_dump()
+cfg = config.load(ARGS.case)
+if cfg['kind'] != 'simulation':
+    raise SystemExit(f'{ARGS.case} has kind = "{cfg["kind"]}"; this script reads '
+                     'a simulation dump -- give a cases/simulations/ folder')
+d = cases.record(cfg)
 t = d['t']
 A_SPEC, LOADING = d['A_specimen'], d['loading']
 
@@ -94,8 +104,9 @@ axes[0].set_xlim(0, t[-1])
 fig.suptitle('Force at each strain gauge vs. average specimen force',
              x=.125, ha='left', fontsize=13, color=INK)
 fig.tight_layout(rect=(0, 0, 1, .97))
-fig.savefig('gauge_forces.png', dpi=140, facecolor=fig.get_facecolor())
-print('wrote gauge_forces.png')
+FIG = cases.output(cfg, 'gauge_forces.png')
+fig.savefig(FIG, dpi=140, facecolor=fig.get_facecolor())
+print(f'wrote {cases.rel(FIG)}')
 
 # --- when does overlap actually begin at each gauge? ----------------------
 print('\noverlap onset = arrival of the far-end reflection at the gauge')

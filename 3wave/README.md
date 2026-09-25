@@ -7,20 +7,21 @@ specimen stress/strain, and a validation against a 1D Hopkinson bar simulation.
 ## Quick start
 
 ```bash
-python3 drive_compression.py             # ~1 s  -> dump.npz
-python3 reduce_specimen.py   # ~2 s  -> specimen_reconstruction.png
+python3 simulate.py cases/simulations/compression          # ~1 s  -> dump.npz
+python3 reduce_specimen.py cases/simulations/compression   # ~2 s  -> specimen_reconstruction.png
 ```
 
-`drive_compression.py` runs the simulation and records the gauge signals;
-`reduce_specimen.py` does the actual wave reconstruction. You only re-run
-`drive_compression.py` when you change a simulation parameter — the reconstruction reads
-`dump.npz`, so iterating on the analysis is a 2-second loop.
+`simulate.py` runs the model and records the gauge signals; `reduce_specimen.py`
+does the actual wave reconstruction. Both write into the case folder they are
+given. You only re-run `simulate.py` when you change a simulation parameter —
+the reconstruction reads that folder's `dump.npz`, so iterating on the analysis
+is a 2-second loop.
 
-There is a second simulator, a Split Hopkinson **tension** bar driven by a
-striker. It writes the same filename, so run one or the other:
+There is a second model, a Split Hopkinson **tension** bar driven by a striker:
 
 ```bash
-python3 drive_tension.py     # SHTB instead of the compression bar
+python3 simulate.py cases/simulations/tension
+python3 reduce_specimen.py cases/simulations/tension
 ```
 
 Its data is TENSION POSITIVE, and the dump says so — `reduce_specimen.py` reads
@@ -28,47 +29,73 @@ the sign convention rather than being told. Unlike the compression model it
 produces genuine incident/reflected **overlap** at the input-bar gauge, which is
 the case multi-gauge separation exists for.
 
-### Always run a driver, never a simulator
+## Cases: one folder each
 
-`simulate_compression.py` and `simulate_tension.py` are modules, not scripts. **Do not run
-them directly.** Both have a `__main__` block, so doing it looks like it works —
-the full simulation runs and `specimen.dat` gets written — but **no `dump.npz` is
-produced**, and every analysis script afterwards then either fails outright or
-silently reads the dump left over from some earlier run. That is a bug you can
-stare at for a while.
+Every case is a folder under `cases/`, holding its own `case.toml`, its input
+data and everything the scripts write for it. Every script takes the folder as
+its one positional argument, and reads and writes nothing outside it — so no
+result can come from a file some other case left behind.
 
-A simulator also always falls back to its own default case, so
-`python3 simulate_tension.py` can only ever give you `[tension]` — there is no
-way to reach `[calibration_tension]` through it.
+```
+defaults.toml                    [numerics] and [analysis] (eta), shared
+cases/
+  simulations/<name>/            kind = "simulation"      case.toml -> dump.npz, specimen.dat
+  identifications/<name>/        kind = "identification"  case.toml + record -> bar_identified.npz
+  analyses/<name>/               kind = "analysis"        case.toml + record, bars = <identification>
+```
 
-| to get | run | never run |
-|---|---|---|
-| direct-impact compression bar | `python3 drive_compression.py` | `simulate_compression.py` |
-| SHTB with a specimen | `python3 drive_tension.py` | `simulate_tension.py` |
-| connected-bar calibration shot | `python3 drive_calibration_tension.py` | `simulate_tension.py` |
-| direct-impact calibration shot | `python3 drive_calibration_compression.py` | `simulate_compression.py` |
-| a MEASURED shot | nothing — `identify_bar_compression.py --experiment CASE` reads the file itself | any driver |
+| kind | what it is | its record | run |
+|---|---|---|---|
+| `simulation` | a model; `model = "compression"` or `"tension"` picks the simulator | none — it writes `dump.npz` | `simulate.py`, then `reduce_specimen.py`, `plot_forces.py`, `lagrange_diagram.py` |
+| `identification` | a no-specimen shot the bar properties are identified from; `method` picks the script | `data` (a measured file in the folder) **or** `simulation` (a simulation folder whose `dump.npz` it reads, and whose configuration it inherits) | `identify_bar_tension.py` / `identify_bar_compression.py` → `bar_identified.npz` |
+| `analysis` | a measured shot with a specimen | `data`, and `bars` naming the identification folder its `c0`, positions, `α(f)` and `c_p(f)` come from | `reconstruct_interface.py`, `reconstruct_TD.py`, … |
 
-The drivers are three lines each and set nothing themselves; they pick a case out
-of `config.toml`, run the model and write the dump. The simulators are kept
-importable so that a parameter sweep can override the config and run the model in
-memory without touching `dump.npz` — that is what the 59-gauge comb in
+The cases in the repository:
+
+| folder | what |
+|---|---|
+| `simulations/compression`, `simulations/tension` | the two models, each with a specimen |
+| `simulations/calibration_compression`, `simulations/calibration_tension` | the same rigs with no specimen, for identification |
+| `identifications/calibration_compression`, `identifications/calibration_tension` | identifying those two simulated shots — the self-check, with ground truth |
+| `identifications/pc_bar` | a real polycarbonate bar, direct impact |
+| `identifications/tension_bar`, `identifications/tension_bar_2` | the real SHTB, bolted through a coupler (the first record is clipped and does not identify) |
+| `analyses/pc_specimen` | a specimen shot on the PC bar, `bars = pc_bar` |
+| `analyses/SHTB_PC`, `analyses/SHTB_PTO1` | specimen shots on the SHTB, `bars = tension_bar_2` |
+
+Paths in a `case.toml` (`data`, `simulation`, `bars`) are relative to the case's
+own folder. `config.load(folder)` reads `defaults.toml`, then the folder's
+`case.toml` on top — a case repeats any `[numerics]` or `[analysis]` key it wants
+to override — and checks that `kind` matches the directory the folder sits in.
+
+A new shot is a new folder: copy the nearest `case.toml`, drop the record next
+to it, point `data` at it (and `bars` at an identification, for an analysis).
+
+### Run simulate.py, never a simulator
+
+`simulate_compression.py` and `simulate_tension.py` are modules, not scripts.
+Running one directly stops with a message: they write no `dump.npz`, and a
+simulator no longer has a default case to fall back to — it needs a loaded
+config. `simulate.py <folder>` is the only way in. The simulators are kept
+importable so that a parameter sweep can override a loaded config and run the
+model in memory without touching any dump — that is what the 59-gauge comb in
 [Where to put the gauges](#where-to-put-the-gauges) was done with, and it is the
 only reason to import one.
 
-## Everything is configured in one file
+## Everything is configured in the case folders
 
-`config.toml` holds all three cases — materials, geometry, gauge locations,
-numerics and the analysis `eta`. The drivers and the analysis scripts read it;
-nothing is hardcoded in the Python any more. To move a gauge or change the
-striker, edit `config.toml` and re-run the driver.
+Each `case.toml` holds its case's materials, geometry, gauge locations and
+whatever its scripts need; `defaults.toml` holds the numerics and the analysis
+`eta` they share. Nothing is hardcoded in the Python. To move a gauge or change
+the striker, edit that simulation's `case.toml` and re-run `simulate.py` on it.
 
-Two further cases exist, one per rig, in which the bars are joined with **no
-specimen** and the gauge positions and `c0` are measured from the record itself:
+Two cases exist per rig in which the bars are joined with **no specimen** and
+the gauge positions and `c0` are measured from the record itself:
 
 ```bash
-python3 drive_calibration_tension.py     && python3 identify_bar_tension.py
-python3 drive_calibration_compression.py && python3 identify_bar_compression.py
+python3 simulate.py cases/simulations/calibration_tension
+python3 identify_bar_tension.py cases/identifications/calibration_tension
+python3 simulate.py cases/simulations/calibration_compression
+python3 identify_bar_compression.py cases/identifications/calibration_compression
 ```
 
 See [Calibrating the bar](#calibrating-the-bar-from-a-connected-bar-shot) for
@@ -76,17 +103,17 @@ the SHTB and [Calibrating a direct-impact
 bar](#calibrating-a-direct-impact-bar) for the other, which is the easier of
 the two because both of its far ends are free.
 
-The cases are independent and have their own gauge lists:
+The cases are independent and have their own gauge lists, e.g. in
+`cases/simulations/tension/case.toml`:
 
 ```toml
-[tension.striker]        # POM tube
+gauges = [130.0, 530.0, 1177.0]   # mm from the interface plane
+
+[striker]                         # POM tube
 E = 3.0
 inner_diameter = 16.1
 outer_diameter = 40.0
 length = 800.0
-
-[tension]
-gauges = [130.0, 530.0, 1177.0]   # mm from the interface plane
 ```
 
 ## What gets recorded
@@ -103,36 +130,37 @@ what is consumed:
 | mean specimen strain and force | ground truth for the reduction; accumulated per step, not stored per element |
 
 That is ~10 numbers per timestep instead of ~12000: **`dump.npz` is 2.9 MB and
-peak memory is 33 MB.** Set `record_full_field = true` in `config.toml` to get
-the old every-element arrays back (as `eps_full` / `force_full`) when you need
-them for an animation or a Lagrange diagram.
+peak memory is 33 MB.** Set `record_full_field = true` in the case's
+`[numerics]` to get the old every-element arrays back (as `eps_full` /
+`force_full`) when you need them for an animation or a Lagrange diagram.
 
 Two optional extras, both reading the same dump:
 
 ```bash
-python3 plot_forces.py       # raw gauge signals vs specimen force
-python3 sep_test.py          # separation accuracy vs ground truth, eta sweep
+python3 plot_forces.py cases/simulations/tension   # raw gauge signals vs specimen force
+python3 sep_test.py cases/simulations/tension      # separation accuracy vs ground truth, eta sweep
 ```
 
 `reduce_specimen.py` prints the validation and writes `specimen_reconstructed.dat`
 (time, stress, strain, strain rate — compression positive) plus a three-panel
-figure.
+figure, both into the simulation's folder.
 
 And a **measured** shot, rather than a simulated one:
 
 ```bash
-python3 identify_bar_compression.py --experiment experiment_pc_bar
-python3 reconstruct_interface.py     # -> force at the impact interface
+python3 identify_bar_compression.py cases/identifications/pc_bar
+python3 reconstruct_interface.py cases/identifications/pc_bar   # -> force at the impact interface
 ```
 
 See [Identifying a real, viscoelastic
 bar](#identifying-a-real-viscoelastic-bar). That path needs no simulator: it
-reads `data/PC_bar_calibration.txt` through `experiment.py`.
+reads `cases/identifications/pc_bar/PC_bar_calibration.txt` through
+`experiment.py`.
 
 To remove every generated file and start clean:
 
 ```bash
-./clean.sh          # remove them
+./clean.sh          # remove them: everything in cases/ except case.toml and records
 ./clean.sh -n       # dry run: list what would go, delete nothing
 ```
 
@@ -497,8 +525,8 @@ bar first.
 ## Seeing the separated waves: the Lagrange diagram
 
 ```bash
-python3 drive_tension.py
-python3 lagrange_diagram.py        # ~6 s -> lagrange_diagram.png
+python3 simulate.py cases/simulations/tension
+python3 lagrange_diagram.py cases/simulations/tension   # ~6 s -> lagrange_diagram.png
 ```
 
 Everything above shows the separated waves as time series at one plane. The same
@@ -722,7 +750,7 @@ $f_n = n\,c/2D$ with floor $(\eta D/c)^2$.
 
 The SHTB was run once with a 59-gauge comb (50 to 2950 mm in 50 mm steps) and all
 1711 two-gauge layouts reduced end to end. This needs no new code — `gauges`
-takes any number of entries, so a denser list in `config.toml` plus index
+takes any number of entries, so a denser list in the case's `case.toml` plus index
 subsetting as in `gauge_count_study.py` is the whole experiment. Noise is 2
 ustrain RMS on a 1110 ustrain peak, low-pass filtered at 20 kHz (99.9 % of the
 gauge energy is below 14 kHz).
@@ -814,12 +842,12 @@ You do not have to. **Bolt the two bars together with no specimen, fire one shot
 with the striker you already have, and read all of it off the record.**
 
 ```bash
-python3 drive_calibration_tension.py    # ~5 s  -> dump.npz
-python3 identify_bar_tension.py         # the identification
+python3 simulate.py cases/simulations/calibration_tension                 # ~5 s -> dump.npz
+python3 identify_bar_tension.py cases/identifications/calibration_tension  # the identification
 ```
 
 The one number you must supply is `L_free_ref`, the tape measurement from a gauge
-to the far free end. It lives in `[calibration_tension]`:
+to the far free end. It lives in `cases/identifications/calibration_tension/case.toml`:
 
 ```toml
 L_free_ref = 3679.5         # in-1 -> far free end [mm]
@@ -853,10 +881,10 @@ inflates ±2.0 mm to ±3.0 mm. Because the configured value depends on the gauge
 layout and the bar lengths, the script cross-checks it against the model geometry
 and warns when the two disagree by more than `L_free_ref_tol`.
 
-`[calibration_tension]` in `config.toml` is the SHTB with the specimen replaced by the
+`cases/simulations/calibration_tension` is the SHTB with the specimen replaced by the
 rig's own 150 mm threaded coupler, in bar stock at bar diameter, so the joint
 reflects nothing and the assembly is a single uniform bar 150 mm longer than the
-two bars. It keeps the **same 800 mm striker** as `[tension]`: a
+two bars. It keeps the **same 800 mm striker** as `simulations/tension`: a
 calibration you can only run with a striker bought for the purpose is not a
 calibration you will run. `identify_bar_tension.py` is **never told the gauge positions**
 — it recovers them.
@@ -916,7 +944,7 @@ whatever the coupler costs in transit time is absorbed into `c0`.
 against the free end and `L_free_ref` never enters, so the only tape number left
 in it is the spacing between the two out-bar gauges. Every `L_free` then comes
 from that gauge's own echo, which means the out-bar positions come back at their
-own tape as a **check** instead of by construction. On `experiment_tension_bar_2`:
+own tape as a **check** instead of by construction. On `identifications/tension_bar_2`:
 
 | | identified | config | slip |
 |---|---|---|---|
@@ -1043,7 +1071,7 @@ section quoted the relative figure for positions too, and that was wrong.
 ### What a mismatched coupler costs
 
 The coupler is bar stock at bar diameter, so acoustically it is not there and
-only its **length** enters — set `length` in `[calibration_tension.specimen]` to
+only its **length** enters — set `length` in that simulation's `[specimen]` to
 the real figure and nothing else about it matters. Length alone is harmless: at
 150 mm of genuine bar material the identification is indistinguishable from the
 1 mm case (`c0` −3.8e-04 against −4.0e-04, `D` +0.11 mm against +0.10 mm).
@@ -1094,7 +1122,7 @@ Hand `separate` the identified `L_free` — distances *from that surface* — an
 boundary condition becomes a residual that should vanish. It consumes nothing but
 the record and the identified numbers, which makes it the only validation in the
 script that survives contact with a real bar. It runs automatically and prints a
-PASS/FAIL, and the bottom-right panel of `bar_identification_tension.png` shows
+PASS/FAIL, and the bottom-right panel of the identification's `bar_identification.png` shows
 it: `ε₊` and `ε₋` as mirror images, then their sum against the threshold band.
 
 The bottom-**left** panel is the check the input bar can carry instead — its far
@@ -1104,7 +1132,7 @@ face from the input bar's two gauges) and `F_out` (at the output-bar face, from
 the output bar's) are two **independent** solves of one quantity, sharing only
 `c0`. Where they part company is the honest error bar on the whole
 identification: `mean |F_in − F_out| / max|F_in|` = 2.83e-02 on
-`experiment_tension_bar_2`. The two curves are one coupler apart and neither is
+`identifications/tension_bar_2`. The two curves are one coupler apart and neither is
 shifted — see `L_joint_eff` above, and NOTES.md thread 11 for why a plain time
 shift does not reconcile them.
 
@@ -1137,7 +1165,7 @@ a hundred times its true value, because the exponential window that regularises
 `separate` amplifies the truncation at the end of the record. `null_window` cuts
 the tail; without it a perfect calibration reports failure.
 
-`null_window` and `null_tol` live in `[calibration_tension]`. On a real bar
+`null_window` and `null_tol` live in the identification's `case.toml`. On a real bar
 Pochhammer–Chree dispersion raises the floor above 7.9e-04, so measure the floor
 with known-good numbers and set `null_tol` to about 3× what you get.
 
@@ -1178,8 +1206,8 @@ A direct-impact rig needs neither. Strike the two bars face to face with nothing
 between them, and read both of them off the record:
 
 ```bash
-python3 drive_calibration_compression.py   # ~1 s  -> dump.npz
-python3 identify_bar_compression.py        # the identification
+python3 simulate.py cases/simulations/calibration_compression                     # ~1 s -> dump.npz
+python3 identify_bar_compression.py cases/identifications/calibration_compression  # the identification
 ```
 
 **Both far ends are free here, and that changes the method.** The SHTB has one
@@ -1206,7 +1234,7 @@ The scale degeneracy `(lengths, c) → (λ·lengths, λ·c)` applies to **each b
 separately** here: once they part company the two are acoustically independent,
 and no timing on one says anything about the other's scale. So this script wants
 **two** measured lengths against the SHTB's one — `L_free_in_ref` and
-`L_free_out_ref` in `[calibration_compression]`, or `--l-in-ref` / `--l-out-ref`.
+`L_free_out_ref` in `cases/identifications/calibration_compression/case.toml`, or `--l-in-ref` / `--l-out-ref`.
 Omit both and it falls back to the model's geometry, which is the self-check
 mode rather than the instrument.
 
@@ -1300,18 +1328,18 @@ section does it from a **measured** shot, and the bar is polycarbonate — which
 turns out to be the interesting part.
 
 ```bash
-python3 identify_bar_compression.py --experiment experiment_pc_bar   # ~2 s
-python3 reconstruct_interface.py                                     # ~2 s
+python3 identify_bar_compression.py cases/identifications/pc_bar   # ~2 s
+python3 reconstruct_interface.py cases/identifications/pc_bar      # ~2 s
 ```
 
-The record is `data/PC_bar_calibration.txt`: a 2415 mm ⌀16 mm 7075 aluminium bar
+The record is `cases/identifications/pc_bar/PC_bar_calibration.txt`: a 2415 mm ⌀16 mm 7075 aluminium bar
 fired straight at a 1027 mm ⌀16.7 mm PC bar, no specimen. Only the PC bar is
 instrumented — two gauges, tape-measured at 118 and 489 mm from the impact face —
 and the columns are **force in kN**, not strain. The deliverable is the force at
 the impact interface, where no gauge can go.
 
-`[experiment_pc_bar]` in `config.toml` holds the file, the column map, the bar,
-and the one measured length. `config.py` validates that family through
+`cases/identifications/pc_bar/case.toml` holds the record (`data`), the column
+map, the bar, and the one measured length. `config.py` validates a measured case through
 `_validate_experiment`, which keeps the checks that still mean something
 (`loading`, `eta`, the gauge list) and drops the simulator's mesh, striker and
 specimen tables. `experiment.py` reads it into the same dict shape `load_dump`
@@ -1497,7 +1525,7 @@ often the steepest thing in the whole record.
 
 **KNOWN BUG — `wavefront_time` picks the wrong edge on a multi-bounce record.**
 "Before the peak" assumes the *first* rise is also the *largest* one before
-`P` eventually peaks. That fails on `experiment_tension_bar_2` (the connected-bar
+`P` eventually peaks. That fails on `identifications/tension_bar_2` (the connected-bar
 SHTB calibration shot): the striker rings through the whole assembly on a
 ~2435 µs period, so several later bounces reach amplitudes comparable to — or
 steeper than — the true first arrival, all still "before the peak" at
@@ -1659,17 +1687,18 @@ imposed, since `separate` is never told about boundaries at all.
 
 ### Reusing the calibration on a shot with a specimen
 
-`data/2026-08-20_PC_AFC.txt` is the same rig with a specimen between the
+`cases/analyses/pc_specimen/2026-08-20_PC_AFC.txt` is the same rig with a specimen between the
 aluminium bar and the PC bar. **Nothing is identified from it** — the bar's
 `c0`, gauge positions and `α(f)` were measured once on the no-specimen shot and
 are properties of the bar, which is the entire point of calibrating:
 
 ```bash
-python3 identify_bar_compression.py --experiment experiment_pc_bar   # once
-python3 reconstruct_interface.py --case experiment_pc_specimen
+python3 identify_bar_compression.py cases/identifications/pc_bar   # once
+python3 reconstruct_interface.py cases/analyses/pc_specimen
 ```
 
-`--case` reconstructs a different record with the identified numbers already in
+The analysis folder's `bars = "../../identifications/pc_bar"` makes the script
+reconstruct this record with the identified numbers in that folder's
 `bar_identified.npz`. `x = 0` is now the **output-bar / specimen interface**;
 the gauge distances are unchanged, because the output bar did not move relative
 to its own gauges — only what its front face touches did.
@@ -1727,11 +1756,11 @@ are referred back to the **source file's** time base via `t0_file`.
 ### One gauge is enough, until it is not
 
 ```bash
-python3 plot_gauges_at_interface.py                              # calibration shot
-python3 plot_gauges_at_interface.py --case experiment_pc_specimen
+python3 plot_gauges_at_interface.py cases/identifications/pc_bar   # calibration shot
+python3 plot_gauges_at_interface.py cases/analyses/pc_specimen
 ```
 
-![Each gauge shifted to the interface on its own](gauges_at_interface_experiment_pc_specimen.png)
+![Each gauge shifted to the interface on its own](cases/analyses/pc_specimen/gauges_at_interface.png)
 
 A single gauge cannot separate anything — one equation, two unknowns — but it
 *can* be shifted to the interface on the assumption that only one wave is
@@ -1811,7 +1840,7 @@ the holder as more of the same bar. The causality, echo, tensile and free-end
 checks belong to the bars' own boundaries and stay at the faces. Each bar's slider
 is measured from that specimen plane: 0 is the holder/specimen interface, and
 `+holder_length` is the bar face. With `holder_length = 0` the output is identical
-to before (max difference 0.0 on `experiment_tension_bar_2`).
+to before (max difference 0.0 on `identifications/tension_bar_2`).
 
 `SHTB_PC` uses 106 mm, not the drawing's 100 mm (60 mm at 16 mm, then 40 mm at
 13 mm). 106 mm is the input-bar face shift that force equilibrium alone selects,
@@ -1938,37 +1967,39 @@ specimen reduction, which is what the floor is actually made of.
 | File | Purpose |
 |---|---|
 | `wave_separation.py` | **The library — use this one.** `separate`, `separate_field`, `backpropagate`, `bar_interface`, `specimen_response`, `conditioning`, `single_wave_window`, `wavefront_time`. Takes `dispersion` (real `c_p(f)`) and `attenuation` (`α(f)`, for a lossy bar). numpy only. |
-| `config.toml` | **All parameters, every case** — materials, geometry, gauge locations, numerics, `eta`, the calibration's `L_free_ref`, and the measured-shot cases. |
-| `config.py` | Reads and validates `config.toml`. A measured shot goes through `_validate_experiment`, which drops the simulator-only checks. stdlib `tomllib`, no dependency. |
+| `cases/<kind>/<name>/case.toml` | **One case's parameters** — materials, geometry, gauge locations, the calibration's `L_free_ref`, a measured record's column map — beside its inputs and outputs. See [Cases: one folder each](#cases-one-folder-each). |
+| `defaults.toml` | Numerics and the analysis `eta`, shared by every case; any `case.toml` may override a key. |
+| `config.py` | `load(folder)`: reads `defaults.toml` + a `case.toml`, merges an identification over the simulation it names, and validates per `kind`. A measured shot goes through `_validate_experiment`, which drops the simulator-only checks. stdlib `tomllib`, no dependency. |
+| `cases.py` | What a case folder holds and depends on: `record` (the measured file or the simulation's `dump.npz`), `identification` (its own or its `bars` folder's `bar_identified.npz`), `output` (a path inside the folder). A missing dump or identification stops with the command that makes it. |
 | `recording.py` | Records only the gauge / interface / specimen rows. Resolves gauge distance → element, once, for both simulators. |
 | `dump.py` | Writes and reads `dump.npz`. Its docstring lists every field. |
-| `simulate_compression.py` | 1D direct-impact COMPRESSION bar. Parameters from `[compression]`. A module — **never run directly**, use `drive_compression.py`. |
-| `simulate_tension.py` | 1D Split Hopkinson TENSION bar, POM striker tube and steel anvil. Parameters from `[tension]` or `[calibration_tension]`. A module — **never run directly**, use `drive_tension.py` or `drive_calibration_tension.py`. |
-| `drive_compression.py` | Runs `simulate_compression.py`, writes `dump.npz`. Three lines — it sets nothing. |
-| `drive_tension.py` | Same for `simulate_tension.py`. Writes the same filename — the dumps overwrite each other. |
-| `drive_calibration_tension.py` | Runs the connected-bar calibration shot (`[calibration_tension]`, no specimen) through `simulate_tension.py`. |
-| `drive_calibration_compression.py` | Runs the direct-impact calibration shot (`[calibration_compression]`, the two bars struck face to face with **no specimen**) through `simulate_compression.py`. |
-| `identify_bar_compression.py` | Recovers each bar's gauge positions, spacing `D` and `c0` from that shot. Two bars, two wave speeds, two identifications. Needs one measured length **per bar** — each bar's own length, `L_free_in_ref` / `L_free_out_ref` in `config.toml`, or `--l-in-ref` / `--l-out-ref`. `--experiment CASE` runs it on a **measured** shot instead, where there is no ground truth and only the bars that carry two gauges are identified. Writes `bar_identified.npz`. |
+| `simulate.py` | `python3 simulate.py cases/simulations/<name>`: runs the simulator the case's `model` names and writes `dump.npz` (and `specimen.dat`) into that folder. It sets nothing itself. |
+| `simulate_compression.py` | 1D direct-impact COMPRESSION bar (`model = "compression"`). A module — **never run directly**, use `simulate.py`. |
+| `simulate_tension.py` | 1D Split Hopkinson TENSION bar, POM striker tube and steel anvil (`model = "tension"`). A module — **never run directly**, use `simulate.py`. |
+| `identify_bar_compression.py` | Recovers each bar's gauge positions, spacing `D` and `c0` from that shot. Two bars, two wave speeds, two identifications. Needs one measured length **per bar** — each bar's own length, `L_free_in_ref` / `L_free_out_ref` in the identification's `case.toml`, or `--l-in-ref` / `--l-out-ref`. On an identification with a measured `data` record there is no ground truth, and only the bars that carry two gauges are identified. Writes `bar_identified.npz` into the identification folder. |
 | `experiment.py` | Loads a MEASURED shot into the same dict shape `dump.npz` produces — column map, baseline removal, trim to the first arrival. No ground-truth keys: it has none and must not invent any. |
 | `identify_attenuation.py` | `α(f)` and `c_p(f)` from two gauges on the same bar, by the transfer function between them. Magnitudes only — no boundary condition — so the free-end null stays an independent check of it. A module; `identify_bar_compression.py` and `reconstruct_interface.py` both use it. |
 | `plot_gauges_at_interface.py` | Each gauge shifted to `x = 0` alone (`backpropagate`) against the two-gauge separation, with each gauge's single-wave window `2(L-d)/c0`. Shows how much of a record needed two gauges, and what one gauge would have claimed past that. |
-| `reconstruct_interface.py` | **The deliverable for a real shot:** force at the impact interface, `F = P + M`, plus the four checks — free-end null, causality, unilateral contact, separation. Identifies nothing itself: `c0`, positions, `α(f)`, `c_p(f)` and the free-end distances all come from `bar_identified.npz`. Runs the identified and tape positions side by side. `--no-attenuation` / `--no-dispersion` for the lossless comparison. |
-| `identify_bar_tension.py` | Recovers gauge positions, spacing `D` and `c0` from that shot's echo train. Needs one measured length, and `c0_route` picks which: `L_free_ref` in `config.toml` (or `--l-free-ref`) by default, the out-bar gauge spacing under `"out_echo_diff"` — that route reads two entries of the configured gauge list and nothing else from it. |
+| `reconstruct_interface.py` | **The deliverable for a real shot:** force at the impact interface, `F = P + M`, plus the four checks — free-end null, causality, unilateral contact, separation. Identifies nothing itself: `c0`, positions, `α(f)`, `c_p(f)` and the free-end distances all come from `bar_identified.npz` — the folder's own for an identification, its `bars` folder's for an analysis. Reports the force at `x = -holder_length`. Runs the identified and tape positions side by side. `--no-attenuation` / `--no-dispersion` for the lossless comparison. |
+| `identify_bar_tension.py` | Recovers gauge positions, spacing `D` and `c0` from that shot's echo train. Needs one measured length, and `c0_route` picks which: `L_free_ref` in the identification's `case.toml` (or `--l-free-ref`) by default, the out-bar gauge spacing under `"out_echo_diff"` — that route reads two entries of the configured gauge list and nothing else from it. |
 | `reduce_specimen.py` | Full chain: gauges → specimen stress/strain, validated against the simulator's own measurement. `--headless` to skip the window. |
 | `lagrange_diagram.py` | The separated waves as x-t FIELDS across the whole assembly, from the ordinary dump. Prints the gauge round trip, the free-surface null and the interface force as numbers. |
 | `plot_forces.py` | Raw gauge forces vs average specimen force. Shows when wave overlap begins. |
 | `gauge_count_study.py` | How many gauges per bar are needed; compares 3+3, 2+3, 1+2, 1+1. |
 | `sep_test.py` | Separation accuracy vs the simulator's interface force; eta sweep. |
 | `wsep.py` | Frozen literal transcription of `wave_separation3`. Kept only as an independent cross-check — see above. Not for use. |
-| `clean.sh` | Removes generated output and `__pycache__`. `-n` for a dry run. |
+| `clean.sh` | Removes everything generated in `cases/` (all but `case.toml` and records) and `__pycache__`. `-n` for a dry run. |
 
-Generated at run time and safe to delete (`./clean.sh`): `dump.npz`,
-`bar_identified.npz`, `specimen.dat`, `specimen_reconstructed.dat`,
-`interface_force.dat`, `gauge_forces.png`, `specimen_reconstruction.png`,
-`bar_identification_tension.png`, `bar_identification_compression.png`,
-`bar_identification_experiment_pc_bar.png`, `interface_force.png`,
-`lagrange_diagram.png`. `clean.sh` also removes the superseded
-`eps.npy` / `force.npy` / `meta.npz` / `meta.npy` if an older run left them.
+Generated at run time, inside the case folder the script was run on, and safe to
+delete (`./clean.sh`): `dump.npz`, `specimen.dat`, `specimen_reconstructed.dat`,
+`gauge_forces.png`, `specimen_reconstruction.png`, `lagrange_diagram.png` in a
+simulation folder; `bar_identified.npz`, `bar_identification.png` in an
+identification folder; `interface_force[_lossless].{png,dat}`,
+`interface_force_TD.*`, `bar_equilibrium.*` and the rest wherever they were run.
+A case folder's inputs — `case.toml` and its record — are never touched.
+`clean.sh` also removes the superseded `eps.npy` / `force.npy` / `meta.npz` /
+`meta.npy`, and a `dump.npz` / `bar_identified.npz` an older revision left beside
+the code.
 
 ## Dependencies
 
@@ -1992,7 +2023,7 @@ force equilibrium |F1-F2|/max|F1|: mean 2.9e-02
 That is the shipped 2-gauges-per-bar layout. The compression case is the one
 that *loses* by dropping to two gauges — with three it gives 1.7e-02 stress and
 1.6e-03 strain. The tension case gains; see below. If you work mainly in
-compression, put `gauges = [130.0, 530.0, 1177.0]` back in `[compression]`.
+compression, put `gauges = [130.0, 530.0, 1177.0]` back in `cases/simulations/compression/case.toml`.
 
 ## The tension simulator (SHTB)
 
@@ -2003,7 +2034,7 @@ pulse to the specimen. Because the striker surrounds the bar, the two occupy the
 same range of x and are modelled as two independent chains coupled by a single
 unilateral contact at the anvil — the striker can push it, never pull it.
 
-The modelled rig, all of it set in `[tension]` of `config.toml`:
+The modelled rig, all of it set in `cases/simulations/tension/case.toml`:
 
 | Part | Material | Geometry |
 |---|---|---|

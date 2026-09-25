@@ -1,21 +1,46 @@
 """
-Loader for config.toml, the single source of truth for both simulators and for
-the analysis scripts.
+Loader for the per-case configuration: one folder per case under cases/, each
+with its own case.toml, on top of the shared defaults.toml.
 
-    from config import load
-    cfg = load('tension')
+    import config
+    cfg = config.load('cases/simulations/tension')
 
     cfg['input_bar']['E']    # material and geometry, as written in the file
     cfg['gauges']            # gauge distances from the interface [mm]
-    cfg['numerics']['dx']    # shared numerics, with any per-case override applied
+    cfg['numerics']['dx']    # defaults.toml's numerics, with the case's override
     cfg['analysis']['eta']
+    cfg['case_dir']          # absolute path of the folder: inputs and outputs
+    config.resolve(cfg, 'data')    # a path in case.toml, made absolute
 
-Every case carries TWO bar tables, [<case>.input_bar] and [<case>.output_bar],
-whether or not the two bars are the same. The compression case genuinely differs
-(aluminium 2000 mm against polycarbonate 1000 mm); the SHTB cases repeat
-themselves. That uniformity is deliberate -- dump.npz records E / A / rho / c0
-per bar, so nothing downstream has to ask whether a rig happens to be symmetric.
-bar_lengths() returns the pair without the caller reaching into either table.
+A case is a FOLDER, and a folder is one of three kinds, stated in its
+case.toml as `kind` and mirrored by the directory it sits in:
+
+    cases/simulations/<name>      kind = "simulation"      a model to integrate;
+                                  `model` = "compression" | "tension" picks the
+                                  simulator. simulate.py writes dump.npz here.
+    cases/identifications/<name>  kind = "identification"  a no-specimen shot the
+                                  bars are identified from; `method` =
+                                  "compression" | "tension" picks the script.
+                                  The record is EITHER `data` (a measured file in
+                                  this folder) OR `simulation` (a simulation
+                                  folder whose dump.npz is read -- and whose own
+                                  configuration is inherited underneath this
+                                  one's keys). Writes bar_identified.npz here.
+    cases/analyses/<name>         kind = "analysis"        a measured shot with a
+                                  specimen. `data` is the record; `bars` names
+                                  the identification folder its c0, positions,
+                                  alpha(f) and c_p(f) come from.
+
+Paths inside case.toml (`data`, `simulation`, `bars`) are relative to the
+case's own folder, never to the working directory.
+
+Every case carries TWO bar tables, [input_bar] and [output_bar], whether or not
+the two bars are the same (a single-bar measured case has [bar] instead). The
+compression model genuinely differs (aluminium 2000 mm against polycarbonate
+1000 mm); the SHTB cases repeat themselves. That uniformity is deliberate --
+dump.npz records E / A / rho / c0 per bar, so nothing downstream has to ask
+whether a rig happens to be symmetric. bar_lengths() returns the pair without
+the caller reaching into either table.
 
 Nothing here computes derived quantities -- areas, wave speeds and element
 indices are the simulators' business, because that is where the geometry lives.
@@ -27,93 +52,142 @@ tomllib is in the standard library from Python 3.11, so this adds no dependency.
 import os
 import tomllib
 
-__all__ = ['load', 'bar_lengths', 'CASES', 'EXPERIMENT_CASES', 'BAR_TABLES',
-           'DEFAULT_PATH']
+__all__ = ['load', 'resolve', 'measured', 'bar_lengths', 'KINDS', 'BAR_TABLES',
+           'ROOT', 'DEFAULTS_PATH', 'CASE_FILE']
 
-# Cases that describe a MEASURED shot rather than one to be simulated. They
-# carry a file to read and the geometry needed to interpret it, and none of the
-# simulator's tables -- no mesh, no striker, no material to integrate, because
-# the bar already did the integrating. _validate skips those checks for them
-# and keeps the ones that still mean something.
-EXPERIMENT_CASES = ('experiment_pc_bar', 'experiment_pc_specimen',
-                    'experiment_tension_bar', 'experiment_tension_bar_2',
-                    'SHTB_PC')
+ROOT = os.path.dirname(os.path.abspath(__file__))
+DEFAULTS_PATH = os.path.join(ROOT, 'defaults.toml')
+CASE_FILE = 'case.toml'
 
-CASES = ('compression', 'calibration_compression',
-         'tension', 'calibration_tension') + EXPERIMENT_CASES
+# kind -> the directory under cases/ that holds that kind. The folder a case
+# sits in must agree with what its case.toml says it is.
+KINDS = {'simulation': 'simulations',
+         'identification': 'identifications',
+         'analysis': 'analyses'}
 
-# Cases that run through simulate_tension.py and therefore need a striker and
-# an anvil table as well as a bar and a specimen.
-_SHTB_CASES = ('tension', 'calibration_tension')
+# What each simulation `model` / identification `method` may be.
+MODELS = ('compression', 'tension')
 
 # The bar tables every case carries, and the key in each that holds its length.
 # Everything needing a bar length goes through bar_lengths() rather than
 # reaching into a table by name.
 BAR_TABLES = (('input_bar', 'L_input'), ('output_bar', 'L_output'))
 
-DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            'config.toml')
+# Keys load() adds; not inherited from a referenced simulation.
+_META = ('kind', 'case', 'case_dir', 'model', 'numerics', 'analysis')
 
 
-def load(case, path=DEFAULT_PATH):
+def _case_dir(case):
+    """Absolute path of a case folder, given the folder or its case.toml."""
+    d = os.path.abspath(os.fspath(case))
+    if os.path.basename(d) == CASE_FILE:
+        d = os.path.dirname(d)
+    if not os.path.isfile(os.path.join(d, CASE_FILE)):
+        raise FileNotFoundError(
+            f'{case}: not a case folder -- no {CASE_FILE} in {d}. Cases live '
+            'under cases/simulations/, cases/identifications/ and '
+            'cases/analyses/, one folder each.')
+    return d
+
+
+def _read(path):
+    with open(path, 'rb') as fh:
+        return tomllib.load(fh)
+
+
+def load(case):
     """
-    Return the merged configuration for one case.
+    Return the merged configuration for one case folder.
 
     Parameters
     ----------
-    case : one of CASES
-        Which setup to read: a simulated case ('compression', 'tension',
-        'calibration_compression', 'calibration_tension') or one of
-        EXPERIMENT_CASES, which describes a measured shot instead.
-    path : str
-        Location of the TOML file. Defaults to config.toml beside this module,
-        so the scripts work regardless of the current working directory.
+    case : path
+        The case folder (or its case.toml), absolute or relative to the working
+        directory.
 
     Returns
     -------
     dict
-        The case's own tables, plus 'numerics' (the shared [numerics] table
-        updated with any [<case>.numerics] override) and 'analysis'.
+        The case.toml's own keys and tables, plus 'numerics' (defaults.toml's
+        [numerics] updated with the case's [numerics]), 'analysis' (likewise),
+        'case' (the folder name), 'case_dir' (its absolute path) and 'kind'.
+        An identification of a simulated shot also carries every key of that
+        simulation's configuration its own case.toml does not set, and
+        'simulation_dir'.
     """
-    if case not in CASES:
-        raise ValueError(f'unknown case {case!r}; expected one of {CASES}')
+    d = _case_dir(case)
+    where = os.path.join(d, CASE_FILE)
+    own = _read(where)
+    defaults = _read(DEFAULTS_PATH)
 
-    with open(path, 'rb') as fh:
-        raw = tomllib.load(fh)
+    kind = own.get('kind')
+    if kind not in KINDS:
+        raise ValueError(f'{where}: kind must be one of {tuple(KINDS)}; '
+                         f'got {kind!r}')
+    parent = os.path.basename(os.path.dirname(d))
+    if parent != KINDS[kind]:
+        raise ValueError(f'{where}: kind = "{kind}" belongs under '
+                         f'cases/{KINDS[kind]}/, not {parent}/')
 
-    for section in ('numerics', 'analysis', case):
-        if section not in raw:
-            raise KeyError(f'{path}: missing [{section}] section')
+    base = {}
+    numerics = dict(defaults['numerics'])
+    analysis = dict(defaults['analysis'])
+    if kind == 'identification' and 'simulation' in own:
+        sim = load(_resolve_in(d, own['simulation'], where, 'simulation'))
+        if sim['kind'] != 'simulation':
+            raise ValueError(f'{where}: `simulation` must name a simulation '
+                             f'folder; {sim["case_dir"]} is a {sim["kind"]}')
+        base = {k: v for k, v in sim.items() if k not in _META}
+        base['simulation_dir'] = sim['case_dir']
+        numerics, analysis = dict(sim['numerics']), dict(sim['analysis'])
 
-    cfg = dict(raw[case])
-    # shared numerics, overridden per case where the case says so. An experiment
-    # case has nothing to integrate, but the merge is harmless and keeps every
-    # loaded case the same shape.
-    numerics = dict(raw['numerics'])
-    numerics.update(cfg.get('numerics', {}))
+    cfg = dict(base)
+    cfg.update(own)
+    numerics.update(own.get('numerics', {}))
+    analysis.update(own.get('analysis', {}))
     cfg['numerics'] = numerics
-    cfg['analysis'] = dict(raw['analysis'])
-    cfg['case'] = case
+    cfg['analysis'] = analysis
+    cfg['case'] = os.path.basename(d)
+    cfg['case_dir'] = d
 
-    _validate(cfg, case, path)
+    _validate(cfg, where)
     return cfg
+
+
+def _resolve_in(d, rel, where, key):
+    p = os.path.normpath(os.path.join(d, os.fspath(rel)))
+    if not os.path.exists(p):
+        raise FileNotFoundError(f'{where}: {key} = "{rel}" -> {p}, which does '
+                                'not exist (paths are relative to the case '
+                                'folder)')
+    return p
+
+
+def resolve(cfg, key):
+    """Absolute path of a path-valued key (`data`, `bars`, `simulation`)."""
+    return _resolve_in(cfg['case_dir'], cfg[key],
+                       os.path.join(cfg['case_dir'], CASE_FILE), key)
+
+
+def measured(cfg):
+    """True for a case whose record is a measured file rather than a dump."""
+    return 'data' in cfg
 
 
 def bar_lengths(cfg):
     """
     (L_input, L_output) for a loaded case, whichever bar layout it uses.
 
-    Saves every caller from reaching into [<case>.input_bar]['L_input'] and its
+    Saves every caller from reaching into [input_bar]['L_input'] and its
     output-bar twin by hand, and from caring that the two lengths live in
     different tables.
     """
     return tuple(cfg[table][key] for table, key in BAR_TABLES)
 
 
-def _validate(cfg, case, path):
+def _validate(cfg, where):
     """Catch the mistakes that would otherwise fail silently or far downstream."""
-    where = f'{path} [{case}]'
-
+    kind = cfg['kind']
     if cfg.get('loading') not in ('compression', 'tension'):
         raise ValueError(f"{where}: loading must be 'compression' or 'tension'")
 
@@ -124,17 +198,42 @@ def _validate(cfg, case, path):
         raise ValueError(f'{where}: holder_length must be a number >= 0 [mm]; '
                          f'got {h!r}')
 
-    if case in EXPERIMENT_CASES:
+    if kind == 'identification':
+        if cfg.get('method') not in MODELS:
+            raise ValueError(f'{where}: method must be one of {MODELS}; '
+                             f'got {cfg.get("method")!r}')
+        if ('data' in cfg) == ('simulation' in cfg):
+            raise KeyError(f'{where}: an identification needs exactly one of '
+                           '`data` (a measured record) or `simulation` (a '
+                           'simulation folder)')
+    if kind == 'analysis':
+        if 'bars' not in cfg:
+            raise KeyError(f'{where}: an analysis needs `bars`, the '
+                           'identification folder its bar properties come from')
+        bars = resolve(cfg, 'bars')
+        own = _read(os.path.join(_case_dir(bars), CASE_FILE))
+        if own.get('kind') != 'identification':
+            raise ValueError(f'{where}: `bars` must name an identification '
+                             f'folder; {bars} is a {own.get("kind")!r}')
+        if 'data' not in cfg:
+            raise KeyError(f'{where}: an analysis needs `data`, its record')
+
+    if measured(cfg):
         _validate_experiment(cfg, where)
         return
 
+    if kind == 'simulation' and cfg.get('model') not in MODELS:
+        raise ValueError(f'{where}: model must be one of {MODELS}; '
+                         f'got {cfg.get("model")!r}')
+    model = cfg.get('model') or cfg.get('method')
+
     for key in [table for table, _ in BAR_TABLES] + ['specimen']:
         if key not in cfg:
-            raise KeyError(f'{where}: missing [{case}.{key}] table')
-    if case in _SHTB_CASES:
+            raise KeyError(f'{where}: missing [{key}] table')
+    if model == 'tension':
         for key in ('striker', 'anvil'):
             if key not in cfg:
-                raise KeyError(f'{where}: missing [{case}.{key}] table')
+                raise KeyError(f'{where}: missing [{key}] table')
 
     num = cfg['numerics']
     if not 0 < num['courant'] <= 1.0:
@@ -179,7 +278,7 @@ def _validate_experiment(cfg, where):
 
     Two bar-table shapes are accepted, and exactly one must be present:
 
-    - a single [.bar] table -- one instrumented bar (experiment_pc_bar has no
+    - a single [.bar] table -- one instrumented bar (identifications/pc_bar has no
       gauge on its aluminium input bar at all, so this is the common case);
     - [.input_bar]/[.output_bar] -- both bars instrumented, joined through
       [.specimen].length (0 for bars butted directly together). Gauge columns
@@ -194,17 +293,7 @@ def _validate_experiment(cfg, where):
         raise ValueError(f'{where}: eta must be > 0 (separate() is singular '
                          'at DC for eta = 0)')
 
-    # A specimen shot that identifies nothing of its own -- c0, positions and
-    # alpha(f) all come from a calibration run on a different case. `requires`
-    # names that case, so reconstruct_interface.py can refuse to reuse the
-    # wrong bar_identified.npz instead of silently reporting numbers that were
-    # never measured on this rig.
-    requires = cfg.get('requires')
-    if requires is not None and requires not in EXPERIMENT_CASES:
-        raise ValueError(f'{where}: "requires" names {requires!r}, which is '
-                         f'not one of {EXPERIMENT_CASES}')
-
-    for key in ('file', 'columns'):
+    for key in ('data', 'columns'):
         if key not in cfg:
             raise KeyError(f'{where}: missing "{key}"')
 

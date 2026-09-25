@@ -1,0 +1,115 @@
+# kind = "identification" of a MEASURED shot: the record is `data`, in this
+# folder.
+#
+#   python3 identify_bar_tension.py cases/identifications/tension_bar_2
+#
+# writes bar_identified.npz into this folder.
+kind = "identification"
+method = "tension"
+
+# --------------------------------------------------------------------------
+# The SAME shot, re-recorded without the amplifier clipping identifications/tension_bar
+# suffered from: ~5 ms instead of ~2 ms, so the assembly round trip
+# (2*5583/5051 ~ 2211 us, at the corrected bar lengths below) actually fits
+# inside the record, and every channel stays well clear of any rail (peaks to
+# +-16 kN, not the +-5 kN this rig's amplifier saturated at before). Same rig,
+# same geometry, same striker/anvil, same corrected bar lengths and tape
+# L_free_ref as identifications/tension_bar -- only `data` (and the longer trim
+# window) differs.
+#
+#   python3 identify_bar_tension.py cases/identifications/tension_bar_2
+# --------------------------------------------------------------------------
+loading = "tension"
+holder_length = 0.0               # mm, bar face -> specimen, same on both
+                                  # bars; 0 = specimen directly on the bars.
+                                  # See analyses/SHTB_PC.
+data = "SHTB_calibration_2026-09-02_2.txt"
+units = "N"
+gauges = [935.00, 119.00, 123.00, 1200.00]
+
+L_free_ref = 3730.0                # in-0 (force_in1) -> output bar's far free end
+L_free_ref_gauge = "in-0"
+L_free_ref_tol = 5.0               # what the tape is good to [mm]
+
+# c0 from the DIFFERENCE of the two out-bar free-end echoes, and every L_free
+# from that gauge's own echo: one anchor, the out-bar gauge spacing, and no
+# other length -- not L_output, not L_free_ref, not the joint. See
+# "[.c0_route]" in identify_bar_tension.py's docstring.
+#
+# This case was on "out_echo" (the old use_only_out_for_c0 = true), which
+# anchors c0 on the out-bar tape positions and the POSITIONS on L_free_ref.
+# Those two anchors disagree by 68 mm here, so the out gauges came back 58 and
+# 69 mm from the same tape that had set c0. Under this route they come back
+# at -3.7 mm, both -- which is not zero either, and says L_output is 2780.7
+# rather than the 2777 below.
+#
+# NOT the default: like "out_echo" it needs both out-bar echoes and has no
+# redundancy if one is mis-detected, which is exactly what happens on
+# calibration_tension's out-0. Both echoes confirmed to agree here first
+# (9.6e-4 relative, rows 3 and 4 of the c0 table).
+c0_route = "out_echo_diff"
+gauge_tol = 2.0                    # what ONE tape gauge position is good to [mm]
+
+[position_override]
+# in-1 identifies at 129.27 mm under c0_route = "out_echo_diff" (138.01 mm
+# under the old arrival-lag route, which also had the joint's 68 mm smeared
+# into it), ~9 mm off tape (120 mm) and outside its own +-4.14 mm tape
+# tolerance -- an order of magnitude worse than every other gauge on this rig
+# manages, and the one part of that gap the joint does NOT explain.
+# Investigated at
+# length (NOTES.md, thread 10 addendum): neither the identified alpha(f), nor
+# the identified c_p(f) (borrowed from the out bar), nor a direct near/far
+# transfer-function fit between in-0 and in-1 reproduces this gap under any
+# sign convention that also gets the DIRECTION right. A direct sweep of the
+# assumed spacing against plateau flatness in the reconstructed F = P+M lands
+# at ~123.5 mm -- close to tape, nowhere near the identified value. Tape is
+# used here as the more defensible of the two, NOT because it has been shown
+# correct; it is an empirical fallback, not a measurement.
+"in-1" = 120.0
+
+[columns]
+time = 0
+"in-0"  = 1
+"in-1"  = 2
+"out-0" = 3
+"out-1" = 4
+
+[input_bar]
+L_input = 2760.0                  # corrected -- initial 3000 mm estimate was wrong
+diameter = 16.0
+
+[output_bar]
+L_output = 2777.0                 # see identifications/tension_bar's [output_bar]
+                                   # comment -- same rig, same re-correction:
+                                   # 930 (pos_in[in-0]) + 23 (L_JOINT) + 2777
+                                   # = 3730 = L_free_ref.
+diameter = 16.0
+
+[specimen]
+length = 23.0
+
+[trim]
+threshold = 0.05
+lead = 500.0                      # widened from 50 -- separate_time_domain()
+                                  # needs 2*tau of quiescent lead-in before the
+                                  # first arrival (322.5 us in-bar, 429.5 us
+                                  # out-bar); the raw file has ~1 ms of
+                                  # pre-trigger to spare.
+baseline = true
+
+[attenuation]
+# Steel/aluminium bar, so material damping is expected to be negligible -- this
+# is here for the PHASE half of fit_attenuation, not the magnitude half. With
+# no dispersion supplied, `separate` assumes c_p = c0 at every frequency, and
+# the two out-bar gauges (120 / 1200 mm, D ~ 1080 mm) disagree enough about the
+# wavefront edge's shape to leak a small (~5 % of peak) transient into P and M
+# right where the edge passes the far gauge -- see NOTES.md, open thread 10.
+# f_hi is also the BAND LIMIT of the returned tables, same as the PC bar.
+f_lo = 2.0                        # kHz
+f_hi = 50.0                       # kHz
+snr = 0.01                        # keep bins whose |F1| is above this fraction
+                                  # of the spectral peak
+
+[null]
+window = 0.75
+tol = 2.5e-3

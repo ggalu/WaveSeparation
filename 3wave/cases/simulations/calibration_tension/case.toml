@@ -1,0 +1,75 @@
+# kind = "simulation": a model to integrate.
+#
+#   python3 simulate.py cases/simulations/calibration_tension
+#
+# writes dump.npz (and the specimen ground truth, specimen.dat) into this folder.
+kind = "simulation"
+model = "tension"
+
+# ==========================================================================
+# CALIBRATION: the two bars bolted straight together, NO specimen.
+# Run through simulate_tension.py by simulate.py, and identified in
+# cases/identifications/calibration_tension by identify_bar_tension.py,
+# which recovers the gauge positions and c0 from the echo train alone -- see "Calibrating the bar from a connected-bar shot" in
+# README.md. The "specimen" here is the real 150 mm threaded COUPLER, in bar
+# material, so the joint is acoustically invisible and the assembly is a single
+# uniform bar 150 mm longer than the two bars.
+#
+# Only two things differ from simulations/tension, and the striker is NOT one of them:
+#   * the specimen is replaced by the coupler, in bar material, which is the
+#     whole point;
+#   * ncyc raised, so the record holds several assembly round trips.
+# The 800 mm striker is kept deliberately -- a calibration you can only run with
+# a striker bought for the purpose is not a calibration you will run.
+# ==========================================================================
+loading = "tension"
+holder_length = 0.0               # mm, bar face -> specimen, same on both
+                                  # bars; 0 = specimen directly on the bars.
+                                  # See analyses/SHTB_PC.
+gauges = [130.0, 530.0]           # the layout being calibrated. The identify
+                                  # script is never told these and recovers them
+
+[numerics]
+ncyc = 8                          # ~4 round trips of the 6150 mm assembly
+
+# Same bars as simulations/tension, and here they MUST match each other: the whole
+# identification models the bolted-together assembly as ONE uniform bar, and
+# identify_bar_tension.py refuses to run if these two tables disagree.
+[input_bar]
+E = 71.7
+rho = 2.81e-6
+diameter = 16.0
+L_input = 3000.0
+
+[output_bar]
+E = 71.7
+rho = 2.81e-6
+diameter = 16.0
+L_output = 3000.0
+
+[striker]     # the SAME 800 mm striker as simulations/tension:
+E = 3.0                           # the calibration must run on the rig as
+rho = 1.41e-6                     # it is, not on a striker bought for it.
+inner_diameter = 16.1             # 2*L/c = 1097 us against a 2376 us round
+outer_diameter = 40.0             # trip, so echoes OVERLAP and the analysis
+length = 800.0                    # times edges rather than whole pulses.
+velocity = 10.0
+
+[anvil]
+E = 210.0
+rho = 7.85e-6
+diameter = 40.0
+length = 20.0
+
+[specimen]    # the threaded coupler: bar material and bar
+diameter = 16.0                   # diameter, so acoustically it is not there
+length = 150.0                    # the real coupler length. Must be RIGHT: any
+                                  # impedance step here biases the whole
+                                  # identification in proportion to
+                                  # length*(1/c_bar - 1/c_joint) -- see
+                                  # "What a mismatched coupler costs" in README.
+E = 71.7                          # bar material: the threads impose a small
+rho = 2.81e-6                     # impedance change, deliberately neglected
+JC_A = 1.0e3                      # yield stress far above anything reachable,
+JC_B = 0.0                        # so the joint stays elastic and linear
+JC_n = 1.0

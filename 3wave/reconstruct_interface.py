@@ -2,8 +2,10 @@
 Reconstruct the FORCE at the impact interface, and check it against the physics
 the rig itself guarantees.
 
-    python3 identify_bar_compression.py --experiment experiment_pc_bar
-    python3 reconstruct_interface.py [--headless]
+    python3 identify_bar_compression.py cases/identifications/pc_bar
+    python3 reconstruct_interface.py cases/identifications/pc_bar  # that shot
+    python3 reconstruct_interface.py cases/analyses/pc_specimen    # a specimen
+                                                                   # shot on it
 
 This is what the calibration was for. `separate` puts the two travelling waves
 at x = 0 -- the plane where the bars touch and no gauge can go -- and their sum
@@ -90,9 +92,10 @@ import plotting
 
 _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-_ap.add_argument('--case', default=None,
-                 help='config case to reconstruct; default is whichever one '
-                      'bar_identified.npz was written from.')
+_ap.add_argument('case',
+                 help='an identification folder (reconstruct its own shot) or '
+                      'an analysis folder (a specimen shot, reconstructed '
+                      'with the bars its `bars` folder identified)')
 _ap.add_argument('--bar', default=None,
                  help='which bar, when the identification covered more than '
                       'one. Default: the only one, or "out".')
@@ -106,31 +109,27 @@ _ap.add_argument('--no-dispersion', action='store_true',
                       'elastic effect (Pochhammer-Chree), not a lossy one.')
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
+import cases
 import config
 from wave_separation import separate, separate_field, wavefront_time
 
-IDENT_FILE = 'bar_identified.npz'
-
-try:
-    ID = np.load(IDENT_FILE, allow_pickle=True)
-except FileNotFoundError:
-    raise SystemExit(
-        f'{IDENT_FILE} not found. Run the identification first:\n'
-        '    python3 identify_bar_compression.py --experiment experiment_pc_bar')
-
-CASE = ARGS.case or str(ID['case'])
+cfg = config.load(ARGS.case)
+if cfg['kind'] == 'simulation':
+    raise SystemExit(f'{ARGS.case} is a simulation; reconstruct an '
+                     'identification or an analysis folder')
+CASE = cfg['case']
+# SELF: reconstructing the identification's own shot, rather than a specimen
+# shot that borrows its bars.
+SELF = cfg['kind'] == 'identification'
+BARS_DIR = cases.rel(cases.bars_dir(cfg))
+IDENT_FILE = f'{BARS_DIR}/{cases.IDENT_FILE}'
+ID = cases.identification(cfg)
 BARS = [str(b) for b in ID['bars']]
 BAR = ARGS.bar or ('out' if 'out' in BARS else BARS[0])
 if BAR not in BARS:
     raise SystemExit(f'{IDENT_FILE} covers {BARS}, not {BAR!r}')
 
-if CASE in config.EXPERIMENT_CASES:
-    from experiment import load_experiment
-    d = load_experiment(CASE)
-else:
-    from dump import load_dump
-    d = load_dump()
-cfg = config.load(CASE)
+d = cases.record(cfg)
 t, dt, N = d['t'], d['dt'], d['N']
 sig = list(d[f'eps_{BAR}'])
 eta = d['eta']
@@ -176,7 +175,7 @@ for _b in BARS:
 # the coupler for a specimen and the distance is still the same mm of bar but
 # no longer the same acoustic path, so the null on this bar stops meaning
 # anything. Say so rather than print a number that looks like a check.
-NULL_VALID = not (BAR == 'in' and CASE != str(ID['case']))
+NULL_VALID = not (BAR == 'in' and not SELF)
 
 # What sits at x = 0. The calibration shot has the two bars touching directly;
 # a specimen shot has something in between. Only the REPORTING depends on it --
@@ -199,22 +198,9 @@ TENSION = str(d.get('loading', cfg.get('loading'))) == 'tension'
 _L_cfg = float(cfg.get('bar', {}).get('length', L))
 if abs(_L_cfg - L) > 1.0:
     raise SystemExit(
-        f'{IDENT_FILE} identified a {L:.1f} mm bar but [{CASE}] describes one '
+        f'{IDENT_FILE} identified a {L:.1f} mm bar but {CASE} describes one '
         f'{_L_cfg:.1f} mm long.\nThose are not the same bar. Re-run the '
         'identification for this rig, or fix the case.')
-
-# [<CASE>].requires, when present, names the ONE case this shot's calibration
-# must come from -- see config.py's _validate_experiment. Catches a stale
-# bar_identified.npz (built from the wrong calibration shot) with a clear
-# message, rather than letting it run and reporting numbers this rig never
-# measured.
-_REQUIRES = cfg.get('requires')
-if _REQUIRES is not None and _REQUIRES != str(ID['case']):
-    raise SystemExit(
-        f'[{CASE}] requires the identification from [{_REQUIRES}], but '
-        f'{IDENT_FILE} was built from [{str(ID["case"])}].\nRun:\n'
-        f'    python3 identify_bar_tension.py --experiment {_REQUIRES}\n'
-        f'then re-run this script.')
 
 ATT = None
 if f'alpha_{BAR}' in ID.files and not ARGS.no_attenuation:
@@ -260,9 +246,9 @@ _h = float(cfg.get('holder_length', 0.0))
 print(f'holder     : {_h:g} mm (holder_length) -- forces reported at '
       + (f'x = -{_h:g} mm, the holder/specimen interface' if _h else
          'the bar faces'))
-if CASE != str(ID['case']):
-    print(f'reusing    : c0, positions and alpha(f) identified on '
-          f'[{str(ID["case"])}].\n             Nothing is identified from THIS '
+if not SELF:
+    print(f'reusing    : c0, positions and alpha(f) identified in '
+          f'{BARS_DIR}.\n             Nothing is identified from THIS '
           'record -- they are properties of the bar.')
 print(f'attenuation: ' + ('lossless (--no-attenuation)' if ARGS.no_attenuation
                           else 'none identified' if ATT is None else
@@ -909,14 +895,14 @@ if OTHER is not None:
     _Dout = abs(PANEL['out']['x'][1] - PANEL['out']['x'][0])
     _title = (f'Force at each bar\'s own interface — in: {_Din:.0f} mm gauge '
               f'spacing, out: {_Dout:.0f} mm'
-              + ('' if CASE == str(ID['case'])
-                 else f'\ncalibrated on [{str(ID["case"])}] — nothing is '
+              + ('' if SELF
+                 else f'\ncalibrated on {BARS_DIR} — nothing is '
                       'identified from this record'))
 else:
     _title = (f'Force at the {IFACE}, reconstructed from two gauges '
               f'{abs(x_id[1]-x_id[0]):.0f} mm apart on the {BAR} bar'
-              + ('' if CASE == str(ID['case'])
-                 else f'\ncalibrated on [{str(ID["case"])}] — nothing is '
+              + ('' if SELF
+                 else f'\ncalibrated on {BARS_DIR} — nothing is '
                       'identified from this record'))
 
 for ax in axes.flat:
@@ -930,10 +916,10 @@ for ax in axes.flat:
 
 fig.suptitle(_title, x=.006, ha='left', fontsize=13, color=INK)
 fig.tight_layout(rect=(0, 0, 1, .975))
-_stem = 'interface_force' + ('' if CASE == str(ID['case']) else f'_{CASE}')
+_stem = cases.output(cfg, 'interface_force')
 FIG = (f'{_stem}.png' if ATT is not None else f'{_stem}_lossless.png')
 fig.savefig(FIG, dpi=140, facecolor=fig.get_facecolor())
-print(f'\nwrote {FIG}')
+print(f'\nwrote {cases.rel(FIG)}')
 
 # Three columns and no more: time, and the force at each bar's own face. P, M
 # and the equilibrium residual used to ride along here; they are derived from
@@ -956,6 +942,6 @@ np.savetxt(DAT, np.column_stack(_cols),
                   f'time is the SOURCE FILE\'s own base (analysis t=0 sits at '
                   f'{T0:.1f} us there)\n'
                   + _geom + f'\neta={eta:g}, x=0 is the {IFACE}')
-print(f'wrote {DAT}: {", ".join(["time"] + [f"F_{b}" for b in DAT_BARS])}')
+print(f'wrote {cases.rel(DAT)}: {", ".join(["time"] + [f"F_{b}" for b in DAT_BARS])}')
 
 plotting.show_unless(HEADLESS)

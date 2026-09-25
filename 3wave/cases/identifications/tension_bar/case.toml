@@ -1,0 +1,100 @@
+# kind = "identification" of a MEASURED shot: the record is `data`, in this
+# folder.
+#
+#   python3 identify_bar_tension.py cases/identifications/tension_bar
+#
+# writes bar_identified.npz into this folder.
+kind = "identification"
+method = "tension"
+
+# --------------------------------------------------------------------------
+# The SHTB's own real-data calibration shot: both bars bolted through a rigid
+# 23 mm coupler of BAR MATERIAL, no specimen. The real-data twin of
+# calibration_tension, not of identifications/pc_bar: TWO bars are instrumented
+# here, two gauges each, so [.input_bar]/[.output_bar] replace the PC cases'
+# single [.bar] table.
+#
+#   python3 identify_bar_tension.py cases/identifications/tension_bar
+#
+# Bar lengths are NOT the same as the nominal simulations/tension rig -- an initial
+# measurement error, corrected here: 2760 mm input / 2800 mm output, not
+# 3000/3000. L_free_ref = 3730.0 mm is a real tape measurement, good to
+# +-5 mm, in-0 (the first gauge on the input bar, force_in1) to the output
+# bar's far free end -- so this is an INSTRUMENT, not the self-check
+# fallback.
+#
+# UNLIKE calibration_tension's simulated coupler, this one is NOT
+# acoustically transparent: the thread connection imposes a small impedance
+# mismatch (confirmed by the rig operator). identify_bar_tension.py's own
+# free-end null test is exactly what is sensitive to that -- see "What a
+# mismatched coupler costs" in README.md -- so expect the null test to read
+# above its threshold even with correct bar lengths and L_free_ref; the null
+# residual is PROVABLY invariant under an L_free_ref scale error (verified
+# numerically here: identical before and after the tape correction), so it is
+# not that being blamed.
+#
+# The force record clips (amplifier saturation) on every channel, railing
+# between roughly -3.6 and -5.4 kN each, starting well before either the
+# striker's own trailing edge or the free-end echo is due. The two features
+# the identification depends on do not survive in clean form anywhere in this
+# record -- confirmed: Q disagrees wildly between gauges (0.97-1.46 ms) even
+# though every search stays clear of the clipped tail. See
+# identifications/tension_bar_2, the same shot re-recorded without the clip.
+# --------------------------------------------------------------------------
+loading = "tension"               # tension POSITIVE, matching simulations/tension
+holder_length = 0.0               # mm, bar face -> specimen, same on both
+                                  # bars; 0 = specimen directly on the bars.
+                                  # See analyses/SHTB_PC.
+data = "SHTB_calibration_2026-09-02.txt"
+units = "N"                       # this file is Newtons, not kN like the PC one
+
+# TAPE positions, in [.columns] order, from the specimen/coupler interface --
+# same convention as pos_in/pos_out elsewhere. NOT read by the identifier;
+# used only as the after-the-fact comparison.
+gauges = [930.0, 120.0, 120.0, 1200.0]
+
+L_free_ref = 3730.0                # in-0 (force_in1) -> output bar's far free end
+L_free_ref_gauge = "in-0"
+L_free_ref_tol = 5.0               # what the tape is good to [mm]
+
+[columns]
+time = 0                          # microseconds; the loader converts to ms
+"in-0"  = 1                       # force_in1 [N], 930 mm from the interface
+"in-1"  = 2                       # force_in2 [N], 120 mm from the interface
+"out-0" = 3                       # force_out1 [N], 120 mm from the interface
+"out-1" = 4                       # force_out2 [N], 1200 mm from the interface
+
+[input_bar]
+L_input = 2760.0                  # corrected -- initial 3000 mm estimate was wrong
+diameter = 16.0
+
+[output_bar]
+L_output = 2777.0                 # re-corrected -- 2800 (itself a correction
+                                   # from an initial 3000 mm estimate) still
+                                   # disagreed with the tape L_free_ref by
+                                   # exactly one coupler length. Confirmed by
+                                   # the rig operator: pos_in[in-0]=930,
+                                   # L_JOINT=23, and L_free_ref=3730 (which
+                                   # already includes the coupler) are right,
+                                   # which pins the error here: 930+23+2777 =
+                                   # 3730, matching L_free_ref exactly.
+diameter = 16.0
+
+[specimen]  # the rigid 23 mm coupler, bar material --
+length = 23.0                      # but THREADED, unlike the simulated
+                                   # coupler, so not quite acoustically
+                                   # transparent -- see the note above.
+                                   # E/rho/diameter are deliberately omitted
+                                   # (identify_bar_tension.py never reads them)
+
+[trim]
+threshold = 0.05
+lead = 50.0
+baseline = true
+
+[null]
+window = 0.75
+# Provisional -- copied from identifications/calibration_tension's null_tol. Re-measure once the
+# pipeline has run once, per this file's own convention of quoting a measured
+# floor rather than a guess (see identifications/pc_bar's [null] comment).
+tol = 2.5e-3

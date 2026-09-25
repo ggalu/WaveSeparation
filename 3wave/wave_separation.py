@@ -455,7 +455,7 @@ def separate_time_domain(t, signals, positions, c0, arrival_frac=0.02):
         before the first arrival. Too little and the seed is simply wrong --
         this is checked below and raises rather than returning a silently
         biased result. Widening [<case>.trim].lead (or .baseline_before) in
-        config.toml is the fix on a measured shot.
+        case.toml is the fix on a measured shot.
       * EDGE LOSS: propagating to x = 0 needs data up to x1/c0 PAST the time
         of interest for eps_plus (so the last x1/c0 of the record is
         unreliable/extrapolated) and x1/c0 BEFORE it for eps_minus (so the
@@ -495,7 +495,7 @@ def _time_domain_pm(t, signals, positions, c0, arrival_frac=0.02):
     wavefront (measured on data/SHTB_PC_2026-09-03.txt: gauge 0 crosses 2 % at
     54 us on nothing but noise, and does not cross 5 % until 1169 us, ~1.1 ms
     later) and this needs raising to match. `[<case>.trim].threshold` in
-    config.toml is the same "fraction of own peak" quantity, already tuned per
+    case.toml is the same "fraction of own peak" quantity, already tuned per
     case to find the real arrival for the trim -- callers reconstructing a
     real shot should pass that, not leave the default.
     """
@@ -540,7 +540,7 @@ def _time_domain_pm(t, signals, positions, c0, arrival_frac=0.02):
             f'need >= 2*tau = {2*tau*1e3:.1f} us of quiescent lead-in before '
             f'the first arrival to seed the time-domain recursion; got only '
             f'{lead*1e3:.1f} us. Widen [<case>.trim].lead (or .baseline_before) '
-            'in config.toml, or use separate() instead.')
+            'in case.toml, or use separate() instead.')
 
     # e2 shifted by tau is needed at every sample, and e2 is fully known
     # up front, so this one is a single vectorised interpolation.

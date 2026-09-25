@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 #
-# Remove generated simulation output and Python bytecode caches.
+# Remove generated output from every case folder, and Python bytecode caches.
 #
-# Everything deleted here is reproducible with:
-#     python3 drive_compression.py && python3 reduce_specimen.py
+# A case folder keeps its inputs -- case.toml and the measured record (*.txt)
+# -- and everything else in it is generated: dump.npz, bar_identified.npz,
+# figures, .dat results. All of it is reproducible with simulate.py,
+# identify_bar_*.py and the analysis scripts, run on that folder.
 #
 # Usage:
 #     ./clean.sh           remove the files
@@ -15,77 +17,37 @@ DRY_RUN=0
 case "${1:-}" in
     -n|--dry-run) DRY_RUN=1 ;;
     "")           ;;
-    -h|--help)    sed -n '3,11p' "$0"; exit 0 ;;
+    -h|--help)    sed -n '3,12p' "$0"; exit 0 ;;
     *)            echo "unknown option: $1 (try -h)" >&2; exit 2 ;;
 esac
 
 # Work relative to this script, so it can be called from anywhere.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Generated artefacts, listed explicitly rather than by wildcard so that a
-# stray *.npy or *.png of your own is never caught by accident.
-GENERATED=(
-    # recorded output written by drive_compression.py / drive_tension.py / drive_calibration_tension.py
-    "dump.npz"
-    # ground truth written by simulate_compression.py
-    "specimen.dat"
-    # superseded by dump.npz; listed so old runs get cleaned up too
-    "eps.npy"
-    "force.npy"
-    "meta.npz"
-    "meta.npy"
-    # results written by reduce_specimen.py
-    "specimen_reconstructed.dat"
-    "specimen_reconstruction.png"
-    # figure written by plot_forces.py
-    "gauge_forces.png"
-    # figure written by identify_bar_tension.py
-    "bar_identification_tension.png"
-    # figure written by identify_bar_compression.py
-    "bar_identification_compression.png"
-    # same script run on a MEASURED shot: --experiment <case>
-    "bar_identification_experiment_pc_bar.png"
-    # the identified numbers, handed from identify_bar_compression.py to
-    # reconstruct_interface.py the way dump.npz is handed from a driver
-    "bar_identified.npz"
-    # written by reconstruct_interface.py, with and without --no-attenuation
-    "interface_force.png"
-    "interface_force.dat"
-    "interface_force_lossless.png"
-    "interface_force_lossless.dat"
-    # same script with --case <another shot>, e.g. the specimen record
-    "interface_force_experiment_pc_specimen.png"
-    "interface_force_experiment_pc_specimen.dat"
-    "interface_force_experiment_pc_specimen_lossless.png"
-    "interface_force_experiment_pc_specimen_lossless.dat"
-    # written by reconstruct_interface_direct.py -- no identification step,
-    # c0 from the gauge-to-gauge transit time
-    "interface_force_direct_experiment_tension_bar_2.png"
-    "interface_force_direct_experiment_tension_bar_2.dat"
-    # same two scripts, --case SHTB_PC: a real specimen shot, calibrated on
-    # experiment_tension_bar_2
-    "interface_force_SHTB_PC.png"
-    "interface_force_SHTB_PC.dat"
-    "interface_force_direct_SHTB_PC.png"
-    "interface_force_direct_SHTB_PC.dat"
-    # figures written by identify_bar_tension_manual.py, one per case
-    "bar_manual_experiment_tension_bar_2.png"
-    "bar_manual_SHTB_PC.png"
-    # figures written by plot_gauges_at_interface.py, one per case
-    "gauges_at_interface.png"
-    "gauges_at_interface_experiment_pc_specimen.png"
-    # figure written by lagrange_diagram.py
-    "lagrange_diagram.png"
-    # legacy outputs of the unmodified simulate_compression.py, in case an older copy is run
-    "eps_vel.dat"
-    "u_vel.dat"
-    "linescan_analysis.dat"
-    "Symmpact_time_force.txt"
-)
+# Generated artefacts: every file in a case folder except its inputs. Listed
+# by what is KEPT rather than by name, because the case folders are the only
+# place scripts write to -- a stray file of your own belongs elsewhere.
+is_input() {
+    case "$(basename "$1")" in
+        case.toml|*.txt) return 0 ;;
+        *)               return 1 ;;
+    esac
+}
+
+GENERATED=()
+while IFS= read -r -d '' f; do
+    is_input "$f" || GENERATED+=("${f#"$ROOT/"}")
+done < <(find "$ROOT/cases" -type f -print0 | sort -z)
+
+# Outputs older revisions wrote beside the code, before the case folders.
+for legacy in dump.npz bar_identified.npz specimen.dat eps.npy force.npy \
+              meta.npz meta.npy; do
+    [ -e "$ROOT/$legacy" ] && GENERATED+=("$legacy")
+done
 
 removed=0
 
-for rel in "${GENERATED[@]}"; do
+for rel in "${GENERATED[@]+"${GENERATED[@]}"}"; do
     path="$ROOT/$rel"
     [ -e "$path" ] || continue
     if [ "$DRY_RUN" -eq 1 ]; then

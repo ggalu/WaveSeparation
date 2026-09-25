@@ -1,11 +1,11 @@
 """
 Force equilibrium across the coupler, from a real SHTB calibration shot.
 
-    python3 identify_bar_tension.py --experiment experiment_tension_bar_2   # once
-    python3 bar_equilibrium.py [--case experiment_tension_bar_2] [--headless]
+    python3 identify_bar_tension.py cases/identifications/tension_bar_2   # once
+    python3 bar_equilibrium.py cases/identifications/tension_bar_2 [--headless]
 
 Each bar is separated INDEPENDENTLY from its own two gauges, using the c0 and
-positions identify_bar_tension.py --experiment already wrote to
+positions identify_bar_tension.py already wrote to the identification's
 bar_identified.npz, and turned into a force at its OWN face touching the
 coupler:
 
@@ -19,10 +19,9 @@ genuine joint, so F_in and F_out reconstructed this way should agree.
 that function's velocity/strain machinery, which assumes a deforming
 specimen and does not apply to a rigid coupler.
 
-drive_tension.py cannot do this: it is the SIMULATOR driver (writes dump.npz
-from [tension]'s own model) and takes no data file. This reads a MEASURED
-shot instead, through the same experiment.py path identify_bar_tension.py
---experiment uses.
+simulate.py cannot do this: it runs a MODEL (writes a simulation folder's
+dump.npz) and takes no data file. This reads a MEASURED shot instead,
+through the same experiment.py path identify_bar_tension.py uses for one.
 """
 import argparse
 
@@ -32,23 +31,25 @@ import plotting
 
 _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-_ap.add_argument('--case', default=None,
-                 help='config case to reconstruct; default is whichever one '
-                      'bar_identified.npz was written from.')
+_ap.add_argument('case',
+                 help='an identification folder (its own shot) or an analysis '
+                      'folder (a specimen shot, with the bars its `bars` '
+                      'folder identified)')
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
+import cases
 import config
 from wave_separation import separate
 
-IDENT_FILE = 'bar_identified.npz'
-try:
-    ID = np.load(IDENT_FILE, allow_pickle=True)
-except FileNotFoundError:
-    raise SystemExit(
-        f'{IDENT_FILE} not found. Run the identification first:\n'
-        '    python3 identify_bar_tension.py --experiment experiment_tension_bar_2')
-
-CASE = ARGS.case or str(ID['case'])
+cfg = config.load(ARGS.case)
+if cfg['kind'] == 'simulation':
+    raise SystemExit(f'{ARGS.case} is a simulation; give an identification '
+                     'or an analysis folder')
+CASE = cfg['case']
+SELF = cfg['kind'] == 'identification'   # its own shot, not a borrowed calibration
+BARS_DIR = cases.rel(cases.bars_dir(cfg))
+IDENT_FILE = f'{BARS_DIR}/{cases.IDENT_FILE}'
+ID = cases.identification(cfg)
 BARS = [str(b) for b in ID['bars']]
 if 'in' not in BARS or 'out' not in BARS:
     raise SystemExit(
@@ -56,13 +57,7 @@ if 'in' not in BARS or 'out' not in BARS:
         'EACH bar\'s own face. Re-run the identification on a shot with two '
         'gauges on both bars.')
 
-if CASE in config.EXPERIMENT_CASES:
-    from experiment import load_experiment
-    d = load_experiment(CASE)
-else:
-    from dump import load_dump
-    d = load_dump()
-cfg = config.load(CASE)
+d = cases.record(cfg)
 t, dt, N = d['t'], d['dt'], d['N']
 eta = d['eta']
 UNITS = d.get('units', 'strain')
@@ -92,7 +87,7 @@ equilibrium = np.abs(F['in'] - F['out']) / (peak if peak > 0 else 1.0)
 # amplifies -- same convention as the free-end null test in
 # identify_bar_tension.py / reconstruct_interface.py.
 NULL_WINDOW = (float(cfg.get('null', {}).get('window', 0.75))
-              if CASE in config.EXPERIMENT_CASES
+              if config.measured(cfg)
               else float(cfg.get('null_window', 0.75)))
 amp = max(float(np.abs(F['in']).max()), float(np.abs(F['out']).max()))
 _i0 = int(np.argmax((np.abs(F['in']) + np.abs(F['out'])) > 0.02 * amp))
@@ -107,12 +102,12 @@ print(f'force equilibrium |F_in-F_out|/max|F_in| : '
 # .dat
 # --------------------------------------------------------------------------
 T0 = float(d.get('t0_file', 0.0))
-DAT = f'bar_equilibrium_{CASE}.dat'
+DAT = cases.output(cfg, 'bar_equilibrium.dat')
 np.savetxt(DAT, np.column_stack([t * 1e3 + T0, F['in'], F['out'], equilibrium]),
           header=f'time[us]  F_in[{UNITS}]  F_out[{UNITS}]  equilibrium\n'
                  f'time is the SOURCE FILE\'s own base (analysis t=0 sits at '
                  f'{T0:.1f} us there)')
-print(f'wrote {DAT}')
+print(f'wrote {cases.rel(DAT)}')
 
 # --------------------------------------------------------------------------
 # figure
@@ -151,8 +146,8 @@ for ax in axes:
     ax.title.set_color(INK)
 
 fig.tight_layout()
-FIG = f'bar_equilibrium_{CASE}.png'
+FIG = cases.output(cfg, 'bar_equilibrium.png')
 fig.savefig(FIG, dpi=140, facecolor=fig.get_facecolor())
-print(f'wrote {FIG}')
+print(f'wrote {cases.rel(FIG)}')
 
 plotting.show_unless(HEADLESS)

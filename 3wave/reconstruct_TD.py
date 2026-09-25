@@ -2,8 +2,8 @@
 Reconstruct the FORCE at the specimen/bar interface using ONLY time-domain
 information -- no eta, no attenuation, no dispersion.
 
-    python3 identify_bar_tension.py --experiment experiment_tension_bar_2
-    python3 reconstruct_TD.py --case SHTB_PC [--headless]
+    python3 identify_bar_tension.py cases/identifications/tension_bar_2
+    python3 reconstruct_TD.py cases/analyses/SHTB_PC [--headless]
 
 `reconstruct_interface.py` solves the two-gauge (or N-gauge) problem in the
 Laplace/frequency domain: exp(-eta t), FFT, a phase-domain normal-equations
@@ -74,9 +74,10 @@ import plotting
 
 _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-_ap.add_argument('--case', default=None,
-                 help='config case to reconstruct; default is whichever one '
-                      'bar_identified.npz was written from.')
+_ap.add_argument('case',
+                 help='an identification folder (its own shot) or an analysis '
+                      'folder (a specimen shot, with the bars its `bars` '
+                      'folder identified)')
 _ap.add_argument('--bar', default=None,
                  help='which bar carries the checks (causality, tensile, '
                       'free-end null), when the identification covered more '
@@ -84,32 +85,26 @@ _ap.add_argument('--bar', default=None,
                       'are reconstructed and get a slider regardless.')
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
+import cases
 import config
 from wave_separation import (separate_time_domain, separate_time_domain_field,
                              wavefront_time)
 
-IDENT_FILE = 'bar_identified.npz'
-
-try:
-    ID = np.load(IDENT_FILE, allow_pickle=True)
-except FileNotFoundError:
-    raise SystemExit(
-        f'{IDENT_FILE} not found. Run the identification first:\n'
-        '    python3 identify_bar_tension.py --experiment experiment_tension_bar_2')
-
-CASE = ARGS.case or str(ID['case'])
+cfg = config.load(ARGS.case)
+if cfg['kind'] == 'simulation':
+    raise SystemExit(f'{ARGS.case} is a simulation; give an identification '
+                     'or an analysis folder')
+CASE = cfg['case']
+SELF = cfg['kind'] == 'identification'   # its own shot, not a borrowed calibration
+BARS_DIR = cases.rel(cases.bars_dir(cfg))
+IDENT_FILE = f'{BARS_DIR}/{cases.IDENT_FILE}'
+ID = cases.identification(cfg)
 BARS = [str(b) for b in ID['bars']]
 BAR = ARGS.bar or ('out' if 'out' in BARS else BARS[0])
 if BAR not in BARS:
     raise SystemExit(f'{IDENT_FILE} covers {BARS}, not {BAR!r}')
 
-if CASE in config.EXPERIMENT_CASES:
-    from experiment import load_experiment
-    d = load_experiment(CASE)
-else:
-    from dump import load_dump
-    d = load_dump()
-cfg = config.load(CASE)
+d = cases.record(cfg)
 t, dt, N = d['t'], d['dt'], d['N']
 sig = list(d[f'eps_{BAR}'])
 eta = d['eta']                                  # unused by the solve itself;
@@ -164,7 +159,7 @@ for _b in BARS:
 # See reconstruct_interface.py: on the SHTB the input bar's own far end is
 # the anvil, reached only through whatever sat at the interface during the
 # calibration shot -- not a path a specimen shot preserves.
-NULL_VALID = not (BAR == 'in' and CASE != str(ID['case']))
+NULL_VALID = not (BAR == 'in' and not SELF)
 
 IMPACT = str(cfg.get('interface', 'impact')) == 'impact'
 IFACE = ('impact interface' if IMPACT else
@@ -180,13 +175,6 @@ if abs(_L_cfg - L) > 1.0:
         f'{_L_cfg:.1f} mm long.\nThose are not the same bar. Re-run the '
         'identification for this rig, or fix the case.')
 
-_REQUIRES = cfg.get('requires')
-if _REQUIRES is not None and _REQUIRES != str(ID['case']):
-    raise SystemExit(
-        f'[{CASE}] requires the identification from [{_REQUIRES}], but '
-        f'{IDENT_FILE} was built from [{str(ID["case"])}].\nRun:\n'
-        f'    python3 identify_bar_tension.py --experiment {_REQUIRES}\n'
-        f'then re-run this script.')
 
 # --------------------------------------------------------------------------
 # the OTHER bar, when the identification covered both
@@ -209,9 +197,9 @@ print(f'bar        : {BAR}, {L:.1f} mm, c0 = {c0:.2f} mm/ms, '
 print(f'signals    : {len(sig)} gauges in {UNITS}, eta (FFT route only) = '
       f'{eta:g} /ms')
 print(f'x = 0 is   : the {IFACE}')
-if CASE != str(ID['case']):
-    print(f'reusing    : c0 and positions identified on '
-          f'[{str(ID["case"])}].\n             Nothing is identified from '
+if not SELF:
+    print(f'reusing    : c0 and positions identified in '
+          f'{BARS_DIR}.\n             Nothing is identified from '
           'THIS record -- they are properties of the bar.')
 print('method     : separate_time_domain -- a time shift between two '
       'gauges, no FFT')
@@ -695,14 +683,14 @@ if OTHER is not None:
     _Dout = abs(PANEL['out']['x'][1] - PANEL['out']['x'][0])
     _title = (f'Force at each bar\'s own interface, TIME DOMAIN ONLY — in: '
               f'{_Din:.0f} mm gauge spacing, out: {_Dout:.0f} mm'
-              + ('' if CASE == str(ID['case'])
-                 else f'\ncalibrated on [{str(ID["case"])}] — nothing is '
+              + ('' if SELF
+                 else f'\ncalibrated on {BARS_DIR} — nothing is '
                       'identified from this record'))
 else:
     _title = (f'Force at the {IFACE}, TIME DOMAIN ONLY, from two gauges '
               f'{abs(x_id[1]-x_id[0]):.0f} mm apart on the {BAR} bar'
-              + ('' if CASE == str(ID['case'])
-                 else f'\ncalibrated on [{str(ID["case"])}] — nothing is '
+              + ('' if SELF
+                 else f'\ncalibrated on {BARS_DIR} — nothing is '
                       'identified from this record'))
 
 for ax in axes.flat:
@@ -716,10 +704,10 @@ for ax in axes.flat:
 
 fig.suptitle(_title, x=.006, ha='left', fontsize=13, color=INK)
 fig.tight_layout(rect=(0, 0, 1, .975))
-_stem = 'interface_force_TD' + ('' if CASE == str(ID['case']) else f'_{CASE}')
+_stem = cases.output(cfg, 'interface_force_TD')
 FIG = f'{_stem}.png'
 fig.savefig(FIG, dpi=140, facecolor=fig.get_facecolor())
-print(f'\nwrote {FIG}')
+print(f'\nwrote {cases.rel(FIG)}')
 
 DAT = f'{_stem}.dat'
 T0 = float(d.get('t0_file', 0.0))
@@ -736,6 +724,6 @@ np.savetxt(DAT, np.column_stack(_cols),
                   f'{T0:.1f} us there)\n'
                   + _geom + f'\nx=0 is the {IFACE}; no eta, no attenuation, '
                   'no dispersion')
-print(f'wrote {DAT}: {", ".join(["time"] + [f"F_{b}" for b in DAT_BARS])}')
+print(f'wrote {cases.rel(DAT)}: {", ".join(["time"] + [f"F_{b}" for b in DAT_BARS])}')
 
 plotting.show_unless(HEADLESS)

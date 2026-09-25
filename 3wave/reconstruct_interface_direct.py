@@ -2,7 +2,7 @@
 Reconstruct the force at the SHTB coupler straight from the record and the
 tape -- no identification step in between.
 
-    python3 reconstruct_interface_direct.py [--case experiment_tension_bar_2]
+    python3 reconstruct_interface_direct.py cases/identifications/tension_bar_2
                                             [--headless]
 
 Every other real-data script in this folder is a two-stage pipeline: an
@@ -10,7 +10,7 @@ Every other real-data script in this folder is a two-stage pipeline: an
 positions to `bar_identified.npz`, and a second script -- `reconstruct_
 interface.py`, `bar_equilibrium.py` -- reads that file. This script collapses
 the two stages into one. It never touches `bar_identified.npz`; everything it
-needs comes from the data file named in `config.toml` and from the config
+needs comes from the record named by `data` in the case's case.toml and from that config
 itself:
 
     gauges              tape distance of each gauge from the coupler [mm]
@@ -104,8 +104,9 @@ import plotting
 
 _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-_ap.add_argument('--case', default='experiment_tension_bar_2',
-                 help='config case to reconstruct (default: %(default)s)')
+_ap.add_argument('case',
+                 help='a measured case folder (identification or analysis) '
+                      'with two instrumented bars')
 _ap.add_argument('--c0-lo', type=float, default=1000.0, metavar='MM/MS',
                  help='lower bound of the wave-speed search used to find the '
                       'gauge-to-gauge transit time (default: %(default)s)')
@@ -118,17 +119,16 @@ _ap.add_argument('--c0', type=float, default=None, metavar='MM/MS',
                       '"Optimizing positions against a known c0" below.')
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
+import cases
 import config
-from experiment import load_experiment
 from wave_separation import separate
 
-CASE = ARGS.case
-if CASE not in config.EXPERIMENT_CASES:
-    raise SystemExit(f'{CASE!r} is not a measured shot; expected one of '
-                     f'{config.EXPERIMENT_CASES}')
-
-cfg = config.load(CASE)
-d = load_experiment(CASE)
+cfg = config.load(ARGS.case)
+CASE = cfg['case']
+if not config.measured(cfg):
+    raise SystemExit(f'{ARGS.case} has no measured `data` record; this '
+                     'script reads a measured shot')
+d = cases.record(cfg)
 t, dt, N = d['t'], d['dt'], d['N']
 eta = d['eta']
 UNITS = d.get('units', 'strain')
@@ -307,7 +307,7 @@ else:
 # .dat
 # --------------------------------------------------------------------------
 T0 = float(d.get('t0_file', 0.0))
-_STEM = f'interface_force_direct_{CASE}' + (
+_STEM = cases.output(cfg, 'interface_force_direct') + (
     f'_c0-{ARGS.c0:.0f}' if ARGS.c0 is not None else '')
 DAT = f'{_STEM}.dat'
 cols = [t * 1e3 + T0]
@@ -328,7 +328,7 @@ np.savetxt(DAT, np.column_stack(cols),
                             f'({_POS_LBL})'
                             for b in BARS)
                  + f', eta={eta:g}, x=0 is each bar\'s own face at the coupler')
-print(f'\nwrote {DAT}')
+print(f'\nwrote {cases.rel(DAT)}')
 
 # --------------------------------------------------------------------------
 # figure
@@ -438,6 +438,6 @@ fig.suptitle(_suptitle, x=.006, ha='left', fontsize=13, color=INK)
 fig.tight_layout(rect=(0, 0, 1, .975))
 FIG = f'{_STEM}.png'
 fig.savefig(FIG, dpi=140, facecolor=fig.get_facecolor())
-print(f'wrote {FIG}')
+print(f'wrote {cases.rel(FIG)}')
 
 plotting.show_unless(HEADLESS)

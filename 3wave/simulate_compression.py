@@ -19,13 +19,15 @@
 # as aluminium too, which it no longer is.
 #
 # Reduced to what the wave-separation pipeline consumes:
-#   - self.history_elems_strain, self.history_elems_force  (read by drive_compression.py)
+#   - self.history_elems_strain, self.history_elems_force  (read by simulate.py)
 #   - specimen.dat                                          (ground truth for
 #     reduce_specimen.py and gauge_count_study.py)
 # All plotting, animation and the other four output files have been removed --
 # visualisation is handled downstream by plot_forces.py and reduce_specimen.py.
 #
 # Units: mm, ms, kg  =>  kN, GPa, and mm/ms (numerically equal to m/s).
+
+import os
 
 import numpy as np
 
@@ -35,12 +37,22 @@ from recording import GaugeRecorder
 
 class SimulateDirectImpact:
     """
-    Parameters come from the [compression] case of config.toml -- see that file
-    for what each one means. Pass a config dict to override for a sweep.
+    Parameters come from a simulation case's case.toml (model =
+    "compression") -- see cases/simulations/compression/ for what each one
+    means. Pass a config dict to override for a sweep.
     """
 
+    def _out(self, name):
+        """`name` in this case's folder; the working directory for a
+        hand-built config with no case_dir."""
+        return os.path.join(self.cfg.get('case_dir', '.'), name)
+
     def __init__(self, cfg=None):
-        cfg = _config.load('compression') if cfg is None else cfg
+        if cfg is None:
+            raise TypeError(
+                'SimulateDirectImpact needs a loaded case config, e.g. '
+                "config.load('cases/simulations/compression')" + '; there is '
+                'no default case any more')
         self.cfg = cfg
         in_bar, out_bar = cfg['input_bar'], cfg['output_bar']
         spec, num = cfg['specimen'], cfg['numerics']
@@ -179,10 +191,10 @@ class SimulateDirectImpact:
         self.forceS = self.rec.spec_force
         self.sigS = self.forceS / self.specimen_cross_section_area
 
-        np.savetxt("specimen.dat", np.column_stack((self.T, self.sigS, self.epsS)),
+        np.savetxt(self._out("specimen.dat"), np.column_stack((self.T, self.sigS, self.epsS)),
                    header="time[ms]  mean specimen stress[GPa]  mean specimen strain[-]"
                           "  (compression negative)")
-        print("... wrote specimen.dat")
+        print(f"... wrote {self._out('specimen.dat')}")
 
     def apply_initial_conditions(self):
         # Apply the impact velocity to the input bar's NODES. inputBarIndices is
@@ -197,7 +209,7 @@ class SimulateDirectImpact:
         Only the gauge rows, the two interface elements and the specimen means
         are kept; see recording.py. Nodal velocity/displacement and element
         stress histories were dropped earlier, and the full element field is now
-        opt-in via config.toml.
+        opt-in via case.toml.
         """
         self.rec = GaugeRecorder(
             self.specimenIndices, self.dx0, self.L, self.gauge_distances,
@@ -218,12 +230,12 @@ class SimulateDirectImpact:
         self.dt = self.courant * self.dx0 / self.c_elem.max()
         self.num_timesteps = int(endTime / self.dt)
         # arange, not linspace: this must agree sample-for-sample with the
-        # t = np.arange(N)*dt used by drive_compression.py and the reduction scripts.
+        # t = np.arange(N)*dt used by dump.write_dump and the reduction scripts.
         self.T = np.arange(self.num_timesteps) * self.dt
 
     def initialize_spatial_mesh(self):
         self.L = self.L_inputbar + self.L_specimen + self.L_outputbar
-        dx = self.dx_target  # discretisation (element) length, from config.toml
+        dx = self.dx_target  # discretisation (element) length, from case.toml
         self.N_x = int(self.L / dx)  # number of elements
         self.x = np.linspace(0, self.L, self.N_x + 1)  # nodal position
         self.v = np.zeros_like(self.x)  # nodal velocity
@@ -289,4 +301,6 @@ class SimulateDirectImpact:
 
 
 if __name__ == "__main__":
-    simulator = SimulateDirectImpact()
+    raise SystemExit('This module writes no dump. Run a simulation case '
+                     'through simulate.py instead:\n'
+                     '    python3 simulate.py cases/simulations/compression')

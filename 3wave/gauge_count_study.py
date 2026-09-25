@@ -3,18 +3,28 @@ How many gauges per bar are actually needed?
 
 Compares gauge layouts against the simulator's own specimen measurement. The
 layouts are given as INDEX subsets into the gauge list configured in
-config.toml, so this adapts to whatever gauges the dump happens to carry.
+case.toml, so this adapts to whatever gauges the dump happens to carry.
 
-    python3 drive_compression.py
-    python3 gauge_count_study.py
+    python3 simulate.py cases/simulations/compression
+    python3 gauge_count_study.py cases/simulations/compression
 """
 import numpy as np
 
-from dump import load_dump
+import argparse
+
+import cases
+import config
 from wave_separation import (separate, backpropagate, bar_interface,
                              specimen_response, single_wave_window)
 
-d = load_dump()
+_ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
+_ap.add_argument('case', help='a simulation folder under cases/simulations/ (run simulate.py on it first)')
+ARGS = _ap.parse_args()
+cfg = config.load(ARGS.case)
+if cfg['kind'] != 'simulation':
+    raise SystemExit(f'{ARGS.case} has kind = "{cfg["kind"]}"; this script reads '
+                     'a simulation dump -- give a cases/simulations/ folder')
+d = cases.record(cfg)
 # Per bar -- the compression case is aluminium against polycarbonate.
 E_IN, A_IN, C_IN = d['E_in'], d['A_in'], d['c0_in']
 E_OUT, A_OUT, C_OUT = d['E_out'], d['A_out'], d['c0_out']

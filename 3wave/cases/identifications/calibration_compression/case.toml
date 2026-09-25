@@ -1,0 +1,58 @@
+# kind = "identification" of a SIMULATED shot. The record is the dump.npz of
+# the simulation folder named below, and that simulation's own configuration
+# (bars, specimen, gauges, numerics) is inherited underneath the keys here.
+#
+#   python3 simulate.py cases/simulations/calibration_compression
+#   python3 identify_bar_compression.py cases/identifications/calibration_compression
+#
+# writes bar_identified.npz into this folder.
+kind = "identification"
+method = "compression"
+simulation = "../../simulations/calibration_compression"
+
+# THE two measured lengths, one per bar: each bar's struck face to its own free
+# end, which is just the bar's length. A strain record is invariant under
+# (all lengths, c) -> (lambda * lengths, lambda * c) SEPARATELY ON EACH BAR
+# here, so each bar needs exactly one length from outside and neither helps the
+# other.
+#
+# Compare the tension rig, which needs L_free_ref -- a gauge-to-free-end
+# distance, awkward because the gauge is a grid under a blob of adhesive. These
+# are bar lengths. You measure them once, with the bars on the bench, before
+# anything is glued to them.
+#
+# Omit both and identify_bar_compression.py falls back to the model's own
+# geometry, which a simulation can supply and a rig cannot -- that is the
+# self-check mode, not the instrument. Override on the command line with
+# --l-in-ref / --l-out-ref to sweep sensitivity without editing this file.
+L_free_in_ref = 2000.0            # input bar: struck face -> free end [mm]
+L_free_out_ref = 1000.0           # output bar: struck face -> free end [mm]
+L_free_ref_tol = 2.0              # what the tape is good to [mm], both bars
+
+# Free-end null test, as in calibration_tension -- but here it runs on BOTH
+# bars, because both far ends are free. See that case for why the window is not
+# optional.
+null_window = 0.75
+
+# ONE THRESHOLD PER BAR, and they are 10-40x looser than the tension rig's
+# 2.5e-3. That is not slack: it is where the floor actually is here. A direct
+# impact starts from a VELOCITY STEP, so the wavefront is a discontinuity and
+# carries every frequency the mesh has; the lumped chain disperses the high
+# ones, the wake differs between two gauges 400 mm apart, and `separate` -- one
+# uniform non-dispersive bar -- cannot fit both at once. The SHTB is spared
+# because its POM striker gives a smooth 59 us rise.
+#
+# Measured with EXACT positions and c0, so this is the model's floor and not an
+# identification error (refining the mesh moves it: 1.07e-2 -> 7.6e-3 at dx =
+# 0.25 on the input bar, converging slowly):
+#
+#            floor    +1 % transit-time error    threshold below
+#   input    1.07e-2  5.93e-2                    3.5e-2   (5.5x discrimination)
+#   output   3.26e-2  7.65e-2                    1.0e-1   (2.3x)
+#
+# The polycarbonate bar is the weaker screen of the two -- 2.3x, about what the
+# tension rig gets against a mismatched coupler. Treat a FAIL as conclusive and
+# a PASS as weak evidence, and re-measure both floors on your own rig with
+# known-good numbers rather than trusting these.
+null_tol_in = 3.5e-2
+null_tol_out = 1.0e-1

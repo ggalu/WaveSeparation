@@ -7,9 +7,11 @@
 Identify gauge positions, gauge spacing and the bar wave speed from a
 connected-bar calibration shot -- no specimen, both bars bolted together.
 
-    python3 drive_calibration_tension.py
-    python3 identify_bar_tension.py [--headless]
-    python3 identify_bar_tension.py --l-free-ref 3679.5 --l-free-ref-tol 2.0
+    python3 simulate.py cases/simulations/calibration_tension
+    python3 identify_bar_tension.py cases/identifications/calibration_tension [--headless]
+    python3 identify_bar_tension.py cases/identifications/calibration_tension \
+        --l-free-ref 3679.5 --l-free-ref-tol 2.0
+    python3 identify_bar_tension.py cases/identifications/tension_bar_2  # a measured shot
 
 Runs on the rig's OWN striker. The 800 mm POM tube gives a 1097 us pulse against
 a 2435 us assembly round trip, so echoes overlap the direct pulse and whole-pulse
@@ -33,7 +35,7 @@ by preference the one the wave reaches first, which is the one furthest from the
 free end -- to the far free end. Call it L_free_ref. It comes from
 
     L_free_ref, L_free_ref_gauge, L_free_ref_tol
-                                 in [calibration_tension] of config.toml
+                                 in cases/identifications/calibration_tension/
     --l-free-ref / --l-free-ref-tol
                                  overriding those, to sweep sensitivity
 
@@ -55,7 +57,7 @@ next paragraph but one spells the distinction out.
 Which tape number carries the scale: [.c0_route]
 --------------------------------------------------------------------------
 ONE length must be imported; WHICH one is a choice, and c0_route in
-config.toml makes it explicit rather than implicit:
+case.toml makes it explicit rather than implicit:
 
   "joint"          (default) c0 = 2 L_free_ref / mean(Q), and every position
                    from L_free_k = L_free_ref - c0 lag_k. Consumes ONLY
@@ -182,25 +184,29 @@ _ap = argparse.ArgumentParser(
 # the capital is what marks this as a length rather than the separation's xi.
 _ap.add_argument('--l-free-ref', type=float, metavar='MM', dest='L_free_ref',
                  help='reference length, gauge -> far free end [mm]. Overrides '
-                      'L_free_ref in config.toml. This is THE measured length '
+                      'L_free_ref in case.toml. This is THE measured length '
                       'the shot cannot supply itself.')
 _ap.add_argument('--l-free-ref-tol', type=float, metavar='MM',
                  dest='L_free_ref_tol',
                  help='what the tape is good to [mm]. Overrides L_free_ref_tol. '
                       'Propagated to every result below.')
-_ap.add_argument('--experiment', metavar='CASE', default=None,
-                 help='identify a MEASURED shot named by a config case (e.g. '
-                      'experiment_tension_bar) instead of the simulated '
-                      'calibration dump. There is no ground truth then, so the '
-                      'true/error columns print a dash.')
+_ap.add_argument('case',
+                 help='an identification folder (kind = "identification", '
+                      'method = "tension"): a measured `data` record, or a '
+                      '`simulation` whose dump.npz is read. A measured shot has '
+                      'no ground truth, so the true/error columns print a dash.')
 HEADLESS, ARGS = plotting.init(parser=_ap)   # picks the backend; precedes pyplot
 
+import cases
 import config
-from dump import load_dump
 from wave_separation import separate
 
-CASE = ARGS.experiment or 'calibration_tension'
-EXPERIMENT = CASE in config.EXPERIMENT_CASES
+cfg = config.load(ARGS.case)
+if cfg['kind'] != 'identification' or cfg['method'] != 'tension':
+    raise SystemExit(f'{ARGS.case}: identify_bar_tension.py needs an '
+                     'identification folder with method = "tension"')
+CASE = cfg['case']
+EXPERIMENT = config.measured(cfg)
 
 # --------------------------------------------------------------------------
 # The measurements a tape and a scale supply. Bar lengths are easy; the gauge
@@ -209,11 +215,10 @@ EXPERIMENT = CASE in config.EXPERIMENT_CASES
 print("*********************")
 print("*** CASE: ", CASE)
 print("*********************")
-cfg = config.load(CASE)
 
 # The whole identification models the bolted-together assembly as ONE uniform
 # bar of speed c0 -- that is what makes the echo train readable at all. So the
-# two bar tables must agree here, even though config.toml keeps them separate
+# two bar tables must agree here, even though case.toml keeps them separate
 # for the compression case's sake. Refuse rather than quietly average them.
 # A measured shot's bar tables need not carry E/rho at all (only length and
 # diameter matter to the identification), so only keys present on BOTH sides
@@ -226,7 +231,7 @@ for _k in ('E', 'rho', 'diameter'):
             f"disagree on {_k!r} ({_IN_BAR[_k]} vs {_OUT_BAR[_k]}).\n"
             "This script identifies ONE uniform bar from its echo train; two "
             "different bars\nwould need a different method entirely. Make the "
-            "two tables match in config.toml.")
+            "two tables match in case.toml.")
 
 L_OUTPUT = _OUT_BAR['L_output']              # output-bar face -> free end [mm]
 # A bolted or threaded coupling has a thickness -- 150 mm on this rig -- and the
@@ -245,7 +250,7 @@ DIAMETER = _IN_BAR['diameter']
 AREA = 0.25 * np.pi * DIAMETER ** 2
 
 # THE tape measurement, and the only quantity here the experiment cannot supply
-# itself -- see "What is and is not identifiable" above. config.toml is its
+# itself -- see "What is and is not identifiable" above. case.toml is its
 # durable home; the flags exist so its influence can be swept without editing
 # the file. Absent from both, the script falls back to the model's own geometry
 # further down, which makes it a self-check rather than an instrument.
@@ -335,15 +340,11 @@ def _rise_time(g, dt):
 # --------------------------------------------------------------------------
 # load, differentiate
 # --------------------------------------------------------------------------
-if EXPERIMENT:
-    from experiment import load_experiment
-    d = load_experiment(CASE)
-else:
-    d = load_dump()
+d = cases.record(cfg)
 if d['loading'] != 'tension':
     raise SystemExit(
         f"this dump is a {d['loading']} shot; identify_bar_tension.py reads the "
-        "SHTB's\nassembly echo train. Run drive_calibration_tension.py, or use "
+        "SHTB's\nassembly echo train. Identify an SHTB calibration case, or use "
         "identify_bar_compression.py\nif you meant the direct-impact rig.")
 t, dt, N = d['t'], d['dt'], d['N']
 n_in = d['eps_in'].shape[0]
@@ -531,7 +532,7 @@ Q_MEAN = float(np.mean(Q[ok]))
 
 # L_FREE_REF is THE tape measurement -- the one length the experiment cannot
 # supply itself. On the rig you measure it once, from a gauge to the far free
-# end, to whatever precision you can manage, and put it in config.toml (or pass
+# end, to whatever precision you can manage, and put it in case.toml (or pass
 # --l-free-ref). The model's own geometry is the FALLBACK: a simulation can
 # supply it and a rig cannot, so relying on it makes this a self-check rather
 # than an instrument. Nothing else below consults the true geometry except the
@@ -811,7 +812,7 @@ if POS_OVERRIDE:
     print('\n--- position override, from config -- NOT identified '
           '---------------')
     print('tape used as the more defensible of the two, not because it has '
-          'been shown\ncorrect -- see [.position_override] in config.toml '
+          'been shown\ncorrect -- see [position_override] in case.toml '
           'for why.')
     for nm, val in POS_OVERRIDE.items():
         if nm not in names:
@@ -1216,7 +1217,7 @@ print(f'  gauges = [{", ".join(f"{p:.2f}" for p in id_pos[n_in:])}]'
 # dump.npz's own convention for this rig's symmetric fields, which is what
 # lets a bar-indexed consumer read this without special-casing a shared-
 # assembly identification.
-IDENT_FILE = 'bar_identified.npz'
+IDENT_FILE = cases.output(cfg, cases.IDENT_FILE)
 BARS = tuple(b for b, cnt in (('in', n_in), ('out', len(names) - n_in))
             if cnt >= 1)
 _out = dict(case=CASE, bars=np.array(BARS), c0_route=C0_ROUTE)
@@ -1242,7 +1243,7 @@ for b, off, cnt in (('in', 0, n_in), ('out', n_in, len(names) - n_in)):
             _out[f'dispersion_f_{b}'], _out[f'dispersion_{b}'] = \
                 ATT[b]['dispersion_table']
 np.savez(IDENT_FILE, **_out)
-print(f'\nwrote {IDENT_FILE}: c0={c0_id:.1f} for {", ".join(BARS)}')
+print(f'\nwrote {cases.rel(IDENT_FILE)}: c0={c0_id:.1f} for {", ".join(BARS)}')
 
 # --------------------------------------------------------------------------
 # figure
@@ -1461,9 +1462,8 @@ fig.suptitle('Per-bar identification check — each column reconstructed from '
              'one place the two meet', x=.006, ha='left', fontsize=13,
              color=INK)
 fig.tight_layout(rect=(0, 0, 1, .97))
-FIG = f'bar_identification_{CASE}.png' if EXPERIMENT \
-    else 'bar_identification_tension.png'
+FIG = cases.output(cfg, 'bar_identification.png')
 fig.savefig(FIG, dpi=140, facecolor=fig.get_facecolor())
-print(f'\nwrote {FIG}')
+print(f'\nwrote {cases.rel(FIG)}')
 
 plotting.show_unless(HEADLESS)

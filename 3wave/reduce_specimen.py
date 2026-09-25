@@ -2,28 +2,38 @@
 Full reduction: three strain gauges per bar -> specimen stress/strain response,
 validated against the simulator's own specimen measurement.
 
-Run drive_compression.py (compression) or drive_tension.py (SHTB) first to produce
-dump.npz. Gauge locations and eta come from config.toml. Then:
+Run simulate.py on a simulation folder first to produce its dump.npz. Gauge
+locations and eta come from that case's case.toml (and defaults.toml). Then:
 
-    python3 reduce_specimen.py              # shows the figure in a window
-    python3 reduce_specimen.py --headless   # writes the .png only, no window
+    python3 reduce_specimen.py cases/simulations/tension              # window
+    python3 reduce_specimen.py cases/simulations/tension --headless   # .png only
 
 The figure is always written to specimen_reconstruction.png either way.
 --headless is also implied by MPL_HEADLESS=1 or by there being no display,
 so the script is safe to run over ssh or from a batch job.
 """
+import argparse
+
 import numpy as np
 
 import plotting
-HEADLESS = plotting.init(__doc__)   # picks the backend; must precede pyplot
+_ap = argparse.ArgumentParser(
+    description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+_ap.add_argument('case', help='a simulation folder under cases/simulations/ (run simulate.py on it first)')
+HEADLESS, ARGS = plotting.init(parser=_ap)   # picks the backend; precedes pyplot
 
-from dump import load_dump
+import cases
+import config
 from wave_separation import separate, bar_interface, specimen_response
 
 # --- load ------------------------------------------------------------------
 # One file, and the gauge signals arrive with their exact positions already
 # resolved -- see dump.py for the full field list.
-d = load_dump()
+cfg = config.load(ARGS.case)
+if cfg['kind'] != 'simulation':
+    raise SystemExit(f'{ARGS.case} has kind = "{cfg["kind"]}"; this script reads '
+                     'a simulation dump -- give a cases/simulations/ folder')
+d = cases.record(cfg)
 # Per bar: the compression case runs aluminium against polycarbonate, so there
 # is no such thing as "the bar's" c0 or E*A. Each bar is separated, and turned
 # into a force, with its OWN numbers.
@@ -37,12 +47,12 @@ if L_SPEC == 0.0:
     raise SystemExit(
         'this dump has NO specimen -- the two bar faces were struck straight against\n'
         'each other, which is a calibration shot. There is nothing to reduce.\n'
-        'Run identify_bar_compression.py on it, or drive_compression.py for a shot\n'
-        'with a specimen in it.')
+        'Identify from it (cases/identifications/), or reduce a simulation\n'
+        'with a specimen in it, e.g. cases/simulations/compression.')
 
 # --- separate each bar, then reduce ---------------------------------------
 # The input bar's interior lies toward global -x, the output bar's toward +x.
-# eta comes from config.toml: stress is insensitive to it, but strain (which
+# eta comes from case.toml: stress is insensitive to it, but strain (which
 # requires integration) degrades badly below ~0.5 /ms. See the regularisation
 # notes in wave_separation.py.
 p_in, m_in = separate(t, d['eps_in'], d['pos_in'], c0=C_IN, eta=ETA)
@@ -105,10 +115,10 @@ for lo, hi in zip(np.linspace(_t0, _t1, 6)[:-1], np.linspace(_t0, _t1, 6)[1:]):
     print(f'  {lo:.2f}-{hi:.2f} ms  strain abs err {np.abs(res["strain"][m]-eps_true[m]).max():.4e}'
           f'   (true strain reaches {eps_true[m].max():.4f})')
 
-np.savetxt('specimen_reconstructed.dat',
+np.savetxt(cases.output(cfg, 'specimen_reconstructed.dat'),
            np.column_stack((t, res['stress'], res['strain'], res['strain_rate'])),
            header=f'time[ms]  stress[GPa]  strain[-]  strain_rate[1/ms]  ({LOADING} positive)')
-print('\nwrote specimen_reconstructed.dat')
+print(f'\nwrote {cases.rel(cases.output(cfg, "specimen_reconstructed.dat"))}')
 
 # --- plot ------------------------------------------------------------------
 import matplotlib.pyplot as plt   # backend already chosen by plotting.init
@@ -152,7 +162,8 @@ fig.suptitle(f'Specimen response recovered from {_n} strain gauge'
              f'{"s" if _n > 1 else ""} per bar ({LOADING})',
              x=.007, ha='left', fontsize=13, color=INK)
 fig.tight_layout(rect=(0, 0, 1, .94))
-fig.savefig('specimen_reconstruction.png', dpi=140, facecolor=fig.get_facecolor())
-print('wrote specimen_reconstruction.png')
+FIG = cases.output(cfg, 'specimen_reconstruction.png')
+fig.savefig(FIG, dpi=140, facecolor=fig.get_facecolor())
+print(f'wrote {cases.rel(FIG)}')
 
 plotting.show_unless(HEADLESS)

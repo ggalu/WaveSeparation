@@ -1,0 +1,84 @@
+# kind = "analysis" of a MEASURED shot with a specimen. Nothing is identified
+# from it: c0, gauge positions, alpha(f) and c_p(f) come from `bars`, an
+# identification folder, which must have been run first.
+#
+#   python3 identify_bar_tension.py cases/identifications/tension_bar_2
+#   python3 reconstruct_interface.py cases/analyses/SHTB_PC
+kind = "analysis"
+bars = "../../identifications/tension_bar_2"
+
+# --------------------------------------------------------------------------
+# The SAME rig as identifications/tension_bar_2, with a real specimen (polycarbonate)
+# between the two bars in place of the 23 mm bar-material coupler.
+#
+# NOTHING IS IDENTIFIED FROM THIS SHOT, exactly as analyses/pc_specimen is to
+# identifications/pc_bar: c0, the gauge positions, alpha(f) and c_p(f) are properties
+# of the BARS, measured once on identifications/tension_bar_2 and reused here.
+# `bars` names that identification folder; its bar_identified.npz is what
+# reconstruct_interface.py reads.
+#
+# x = 0 is each bar's own face, exactly as on the calibration shot -- the
+# specimen sits between the two faces without moving either one. The tape
+# gauges are therefore unchanged from identifications/tension_bar_2: confirmed by
+# the rig operator that the bars/gauges were not touched between the two shots,
+# only the coupler was swapped for the specimen.
+#
+# The input bar carries the full incident+reflected pulse (peaks ~17.6 kN); the
+# output bar carries only what the specimen transmits (~1.85 kN, ~10x down) --
+# consistent with a soft polycarbonate specimen between stiff aluminium bars.
+# --------------------------------------------------------------------------
+loading = "tension"
+data = "SHTB_PC_2026-09-03.txt"
+units = "N"
+interface = "specimen"
+
+# The specimen sits in an aluminium holder screwed onto each bar face (bar
+# material; 60 mm at 16 mm then 40 mm at 13 mm, by drawing). The force at a bar
+# FACE also accelerates the holder -- the 8.5 kN spike F_in shows there, which
+# the ~2 kN specimen never carries -- so reconstruct_interface.py reports the
+# force at x = -holder_length, on BOTH bars, treating the holder as more bar.
+# 106 mm rather than the drawing's 100: it is the input-bar face shift that
+# force equilibrium alone selects (106-110 mm across windows), and it scores
+# better than the stepped 60@16 | 40@13 model of the same holder. Its sliders
+# move the plane relative to this one.
+holder_length = 106.0
+
+gauges = [935.00, 119.00, 119.00, 1199.00]  # tape, carried over unchanged from
+                                             # identifications/tension_bar_2 -- see
+                                             # note above
+
+[columns]
+time = 0
+"in-0"  = 1                       # force_in1 [N], 935 mm from the interface
+"in-1"  = 2                       # force_in2 [N], 119 mm from the interface
+"out-0" = 3                       # force_out1 [N], 119 mm from the interface
+"out-1" = 4                       # force_out2 [N], 1199 mm from the interface
+
+[input_bar]
+L_input = 2760.0                  # same bar as identifications/tension_bar_2
+diameter = 16.0
+
+[output_bar]
+L_output = 2777.0                 # same bar as identifications/tension_bar_2
+diameter = 16.0
+
+[specimen]                # polycarbonate, rectangular cross-section --
+length = 8.0                      # NOT read by reconstruct_interface.py (E, A
+                                   # and rho never enter that solve); recorded
+                                   # here for reduce_specimen.py and for anyone
+                                   # reading this file. Cross-section 3 x 8 mm
+                                   # (not circular, so no "diameter" key here).
+
+[trim]
+threshold = 0.05
+lead = 900.0                      # this record has ~990 us of pre-trigger
+                                   # baseline to spare, checked directly on
+                                   # the file
+baseline = true
+
+[null]
+window = 0.75
+# Provisional -- copied from identifications/tension_bar_2's [null], per that case's
+# own convention of quoting a measured floor rather than a guess. Re-measure
+# once the pipeline has run once on this shot.
+tol = 2.5e-3

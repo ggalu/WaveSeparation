@@ -1,0 +1,62 @@
+# kind = "simulation": a model to integrate.
+#
+#   python3 simulate.py cases/simulations/tension
+#
+# writes dump.npz (and the specimen ground truth, specimen.dat) into this folder.
+kind = "simulation"
+model = "tension"
+
+# ==========================================================================
+# TENSION: Split Hopkinson tension bar (simulate_tension.py)
+# A hollow POM striker rides on the input bar, is launched away from the
+# specimen, and strikes a steel anvil at the bar's far end.
+# ==========================================================================
+loading = "tension"
+gauges = [130.0, 530.0]
+holder_length = 0.0               # mm, bar face -> specimen, same on both
+                                  # bars; 0 = specimen directly on the bars.
+                                  # See analyses/SHTB_PC.
+
+# The two bars are IDENTICAL here -- this is a conventional symmetric SHTB.
+# They are still written as two tables because every case has the same shape:
+# config.bar_lengths() and dump.npz's per-bar E / A / rho / c0 do not want to
+# know whether a given rig happens to use the same stock on both sides.
+# Keep the two in step unless you mean not to.
+[input_bar]               # 7075-T6 aluminium
+E = 71.7
+rho = 2.81e-6
+diameter = 16.0
+L_input = 3000.0
+
+[output_bar]              # 7075-T6 aluminium, the same bar
+E = 71.7
+rho = 2.81e-6
+diameter = 16.0
+L_output = 3000.0
+
+[striker]                 # POM (polyoxymethylene / acetal) tube
+E = 3.0
+rho = 1.41e-6
+inner_diameter = 16.1             # clearance fit over the 16 mm bar
+outer_diameter = 40.0
+length = 800.0                    # sets the pulse length, 2*L/c_striker.
+                                  # POM is 3.5x slower than aluminium, so
+                                  # 800 mm gives 1097 us, not 314 us.
+velocity = 10.0                   # toward the anvil, away from the specimen
+
+[anvil]                   # steel disc, rigidly attached to the input bar
+E = 210.0
+rho = 7.85e-6
+diameter = 40.0
+length = 20.0
+
+[specimen]
+diameter = 5.0
+length = 10.0
+E = 2.4
+rho = 2.81e-6                     # only the specimen's inertia depends on this,
+                                  # and it is short: assume the bar alloy
+JC_A = 0.06
+JC_B = 0.16
+JC_n = 0.3
+# failure_strain = 0.5            # plastic strain at failure; omit to disable

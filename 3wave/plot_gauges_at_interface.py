@@ -1,8 +1,8 @@
 """
 Each gauge shifted to x = 0 ON ITS OWN, against the two-gauge separation.
 
-    python3 identify_bar_compression.py --experiment experiment_pc_bar
-    python3 plot_gauges_at_interface.py [--case CASE] [--headless]
+    python3 identify_bar_compression.py cases/identifications/pc_bar
+    python3 plot_gauges_at_interface.py cases/analyses/pc_specimen [--headless]
 
 One gauge gives one equation per frequency and there are two unknowns, so a
 single gauge cannot separate anything. What it CAN do is be shifted to the
@@ -48,38 +48,34 @@ import plotting
 
 _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-_ap.add_argument('--case', default=None,
-                 help='config case to plot; default is whichever one '
-                      'bar_identified.npz was written from.')
+_ap.add_argument('case',
+                 help='an identification folder (its own shot) or an analysis '
+                      'folder (a specimen shot, with the bars its `bars` '
+                      'folder identified)')
 _ap.add_argument('--bar', default=None, help='which bar. Default "out".')
 _ap.add_argument('--no-attenuation', action='store_true',
                  help='shift with a lossless bar, i.e. a pure time delay.')
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
+import cases
 import config
 from wave_separation import separate, backpropagate, wavefront_time
 
-IDENT_FILE = 'bar_identified.npz'
-try:
-    ID = np.load(IDENT_FILE, allow_pickle=True)
-except FileNotFoundError:
-    raise SystemExit(
-        f'{IDENT_FILE} not found. Run the identification first:\n'
-        '    python3 identify_bar_compression.py --experiment experiment_pc_bar')
-
-CASE = ARGS.case or str(ID['case'])
+cfg = config.load(ARGS.case)
+if cfg['kind'] == 'simulation':
+    raise SystemExit(f'{ARGS.case} is a simulation; give an identification '
+                     'or an analysis folder')
+CASE = cfg['case']
+SELF = cfg['kind'] == 'identification'   # its own shot, not a borrowed calibration
+BARS_DIR = cases.rel(cases.bars_dir(cfg))
+IDENT_FILE = f'{BARS_DIR}/{cases.IDENT_FILE}'
+ID = cases.identification(cfg)
 BARS = [str(b) for b in ID['bars']]
 BAR = ARGS.bar or ('out' if 'out' in BARS else BARS[0])
 if BAR not in BARS:
     raise SystemExit(f'{IDENT_FILE} covers {BARS}, not {BAR!r}')
 
-if CASE in config.EXPERIMENT_CASES:
-    from experiment import load_experiment
-    d = load_experiment(CASE)
-else:
-    from dump import load_dump
-    d = load_dump()
-cfg = config.load(CASE)
+d = cases.record(cfg)
 t, dt, N = d['t'], d['dt'], d['N']
 sig = list(d[f'eps_{BAR}'])
 eta = d['eta']
@@ -210,8 +206,8 @@ axes[1].set_xlim(tt[0], tt[i_end])
 fig.suptitle('One gauge is enough — until it is not',
              x=.006, ha='left', fontsize=13, color=INK)
 fig.tight_layout(rect=(0, 0, 1, .968))
-FIG = 'gauges_at_interface' + ('' if CASE == str(ID['case']) else f'_{CASE}') + '.png'
+FIG = cases.output(cfg, 'gauges_at_interface.png')
 fig.savefig(FIG, dpi=140, facecolor=fig.get_facecolor())
-print(f'\nwrote {FIG}')
+print(f'\nwrote {cases.rel(FIG)}')
 
 plotting.show_unless(HEADLESS)

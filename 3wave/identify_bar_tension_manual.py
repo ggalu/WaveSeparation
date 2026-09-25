@@ -2,13 +2,13 @@
 Interactive, config-only per-bar wave separation -- the simple counterpart to
 identify_bar_tension.py.
 
-    python3 identify_bar_tension.py --experiment experiment_tension_bar_2
-    python3 identify_bar_tension_manual.py --experiment experiment_tension_bar_2
+    python3 identify_bar_tension.py cases/identifications/tension_bar_2
+    python3 identify_bar_tension_manual.py cases/identifications/tension_bar_2
 
 identify_bar_tension.py IDENTIFIES c0 and the gauge positions from the echo
 train; this script does neither. It takes both as given -- c0 from
 bar_identified.npz (the file the other script just wrote) and the gauge
-positions from [<case>.gauges] in config.toml, i.e. the tape measurements --
+positions from `gauges` in the case's case.toml, i.e. the tape measurements --
 and, for each bar separately, feeds its own two gauges straight into
 `separate` to reconstruct F = P + M at that bar's own interface. No edge
 timing, no striker-pulse or free-end-echo search, no attenuation: just the
@@ -31,9 +31,9 @@ The point is to let a person SEE what the tape positions do to the
 reconstruction and nudge them by hand. Every gauge gets a slider, in 1 mm
 steps; dragging one instantly re-solves and redraws that gauge's bar. Closing
 the plot window writes whatever positions the sliders are left at back into
-[<case>] in config.toml, in place, so the next run of either script starts
-from them. --headless renders once from the tape values and exits without
-touching config.toml, since there is then nothing to hand-adjust.
+`gauges` in the case's own case.toml, in place, so the next run of either
+script starts from them. --headless renders once from the tape values and
+exits without touching case.toml, since there is then nothing to hand-adjust.
 """
 import argparse
 import re
@@ -44,31 +44,31 @@ import plotting
 
 _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-_ap.add_argument('--experiment', metavar='CASE',
-                 default='experiment_tension_bar_2',
-                 help='config case to read (default: experiment_tension_bar_2). '
-                      'Must have [<case>.input_bar] and [<case>.output_bar] -- '
-                      'two instrumented bars.')
+_ap.add_argument('case',
+                 help='a measured identification or analysis folder with '
+                      '[input_bar] and [output_bar] -- two instrumented bars. '
+                      'c0 comes from its bar_identified.npz (an analysis: from '
+                      'its `bars` folder); adjusted gauges are saved back to '
+                      'ITS case.toml on close.')
 _ap.add_argument('--window', type=float, default=50.0, metavar='MM',
                  help='slider half-range around each tape position [mm] '
                       '(default 50)')
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
+import cases
 import config
-from experiment import load_experiment
 from wave_separation import separate, separate_time_domain
 
-CASE = ARGS.experiment
-if CASE not in config.EXPERIMENT_CASES:
-    raise SystemExit(f'{CASE!r} is not a measured case; expected one of '
-                     f'{config.EXPERIMENT_CASES}')
-
-cfg = config.load(CASE)
+cfg = config.load(ARGS.case)
+CASE = cfg['case']
+if not config.measured(cfg):
+    raise SystemExit(f'{ARGS.case} has no measured `data` record; this script '
+                     'reads a measured shot')
 if 'input_bar' not in cfg or 'output_bar' not in cfg:
     raise SystemExit(f'[{CASE}] has no [.input_bar]/[.output_bar] pair -- this '
                      'script needs two instrumented bars, one gauge pair each.')
 
-d = load_experiment(CASE)
+d = cases.record(cfg)
 t, dt, N, eta = d['t'], d['dt'], d['N'], d['eta']
 UNITS = d.get('units', 'strain')
 SCALE, USYM = (1.0, UNITS) if UNITS != 'strain' else (1e6, 'ustrain')
@@ -78,7 +78,7 @@ if d['eps_in'].shape[0] < 2 or d['eps_out'].shape[0] < 2:
                      f'{d["eps_in"].shape[0]} in, {d["eps_out"].shape[0]} out')
 
 # --------------------------------------------------------------------------
-# gauge names, in the order config.toml's flat "gauges" list uses -- the same
+# gauge names, in the order case.toml's flat "gauges" list uses -- the same
 # split experiment.py already applied to build eps_in/eps_out/pos_in/pos_out,
 # recovered here only so positions can be written BACK to that same list.
 # --------------------------------------------------------------------------
@@ -112,17 +112,12 @@ t_in, t_out = t[:HI_IN], t[:HI_OUT]
 sig_in = d['eps_in'][:, :HI_IN]
 sig_out = d['eps_out'][:, :HI_OUT]
 
-# c0 is a property of the bar, not of one shot -- borrowed from whatever
-# identify_bar_tension.py last identified, since this script identifies
-# nothing of its own.
-IDENT_FILE = 'bar_identified.npz'
-try:
-    ident = np.load(IDENT_FILE)
-except FileNotFoundError:
-    raise SystemExit(f'{IDENT_FILE} not found. Run\n\n'
-                     f'    python3 identify_bar_tension.py --experiment {CASE}\n\n'
-                     'first, to identify c0 -- this script only handles gauge '
-                     'positions, it does not identify a wave speed.')
+# c0 is a property of the bar, not of one shot -- borrowed from the
+# identification this case points at (its own, or its `bars` folder's), since
+# this script identifies nothing of its own.
+IDENT_FILE = cases.rel(cases.output({'case_dir': cases.bars_dir(cfg)},
+                                    cases.IDENT_FILE))
+ident = cases.identification(cfg)
 if 'c_in' not in ident.files or 'c_out' not in ident.files:
     raise SystemExit(f'{IDENT_FILE} has no c_in/c_out -- re-run '
                      'identify_bar_tension.py on a two-bar case first.')
@@ -331,55 +326,51 @@ check.on_clicked(_on_toggle)
 radio.on_clicked(_on_method)
 _sync_dispersion_label()
 
-FIG = f'bar_manual_{CASE}.png'
+FIG = cases.output(cfg, 'bar_manual.png')
 fig.savefig(FIG, dpi=140, facecolor=fig.get_facecolor())
-print(f'wrote {FIG}')
+print(f'wrote {cases.rel(FIG)}')
 
 
 # --------------------------------------------------------------------------
-# save adjusted positions back to config.toml on close
+# save adjusted positions back to the case's case.toml on close
 # --------------------------------------------------------------------------
-def _save_positions(path, case, names, values):
+def _save_positions(path, names, values):
     """
-    Rewrite `gauges = [...]` inside [<case>] in place, leaving every other
-    line -- including its own comments -- untouched. Targeted text surgery
-    rather than a round-trip through tomllib, which carries no comments and
-    would silently drop them.
+    Rewrite the top-level `gauges = [...]` of a case.toml in place, leaving
+    every other line -- including its own comments -- untouched. Targeted text
+    surgery rather than a round-trip through tomllib, which carries no comments
+    and would silently drop them. Top-level keys are the ones before the first
+    [table] header.
     """
     with open(path) as fh:
         lines = fh.read().split('\n')
 
-    sect_re = re.compile(rf'^\[{re.escape(case)}\]\s*$')
-    start = next((i for i, ln in enumerate(lines) if sect_re.match(ln)), None)
-    if start is None:
-        raise SystemExit(f'could not find [{case}] in {path}; not saving')
-    end = next((i for i in range(start + 1, len(lines))
-               if lines[i].startswith('[')), len(lines))
-
+    end = next((i for i, ln in enumerate(lines) if ln.startswith('[')),
+               len(lines))
     gauges_re = re.compile(r'^(gauges\s*=\s*)\[[^\]]*\](.*)$')
-    for i in range(start, end):
+    for i in range(end):
         m = gauges_re.match(lines[i])
         if m:
             new_list = ', '.join(f'{v:.2f}' for v in values)
             lines[i] = f'{m.group(1)}[{new_list}]{m.group(2)}'
             break
     else:
-        raise SystemExit(f'could not find "gauges = [...]" inside [{case}]; '
-                         'not saving')
+        raise SystemExit(f'could not find a top-level "gauges = [...]" in '
+                         f'{path}; not saving')
 
     with open(path, 'w') as fh:
         fh.write('\n'.join(lines))
-    print(f'wrote {len(values)} gauge position(s) for [{case}] to {path}: '
+    print(f'wrote {len(values)} gauge position(s) to {cases.rel(path)}: '
           + ', '.join(f'{nm}={v:.2f}' for nm, v in zip(names, values)))
 
 
 def _on_close(_event):
     if np.allclose(pos, pos0):
-        print('gauge positions unchanged; config.toml left as is')
+        print('gauge positions unchanged; case.toml left as is')
         return
     fig.savefig(FIG, dpi=140, facecolor=fig.get_facecolor())
-    print(f'wrote {FIG}')
-    _save_positions(config.DEFAULT_PATH, CASE, NAMES, pos)
+    print(f'wrote {cases.rel(FIG)}')
+    _save_positions(cases.output(cfg, config.CASE_FILE), NAMES, pos)
 
 
 if not HEADLESS:

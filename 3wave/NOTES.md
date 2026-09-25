@@ -1,13 +1,13 @@
 # Working notes — bar calibration
 
 Open threads and decisions from the calibration work of **2026-08-15**. Anything
-already explained in `README.md`, `config.toml` or the script docstrings is *not*
+already explained in `README.md`, the case folders' `case.toml` files or the script docstrings is *not*
 repeated here; this file is only for what those do not record.
 
 ## Decisions taken
 
 - **The coupler is 150 mm of bar stock at bar diameter.** Set in
-  `[calibration_tension.specimen]`. The threaded connection's small impedance
+  the `[specimen]` table of `cases/simulations/calibration_tension`. The threaded connection's small impedance
   change is **deliberately neglected** — measured scaling says the bias goes as
   `L_joint * (1/c_bar - 1/c_joint)`, so a short thread engagement in matched
   material is second-order. A coupler of *different material* would not be, and
@@ -32,12 +32,12 @@ repeated here; this file is only for what those do not record.
   clipping both would stop the output bar carrying the tensile wave its own free
   end sends back, 1 mm inside the bar and for no physical reason.
 - ~~**No loader for real experimental data yet**, by explicit decision.~~
-  **Done 2026-08-20**, driven by `data/PC_bar_calibration.txt` — a real
-  direct-impact shot into a polycarbonate bar. `experiment.py` builds the dump
-  dict from a text record; `[experiment_pc_bar]` in `config.toml` holds the
-  column map and the geometry; `config.py` validates that family through
+  **Done 2026-08-20**, driven by `cases/identifications/pc_bar/PC_bar_calibration.txt`
+  — a real direct-impact shot into a polycarbonate bar. `experiment.py` builds
+  the dump dict from a text record; that folder's `case.toml` holds the
+  column map and the geometry; `config.py` validates a measured case through
   `_validate_experiment`, which drops the simulator-only tables.
-  `identify_bar_compression.py --experiment CASE` runs on it unchanged in
+  `identify_bar_compression.py <identification folder>` runs on it unchanged in
   method. The keys a rig cannot supply — `c0_*`, `E_*`, `force_iface_*`,
   `spec_*` — are ABSENT rather than guessed, and that absence is what makes the
   true/error columns print a dash instead of quietly comparing against an input.
@@ -49,6 +49,19 @@ repeated here; this file is only for what those do not record.
   at `attenuation=None`. `identify_attenuation.py` measures `alpha(f)` from the
   two-gauge transfer function — MAGNITUDES ONLY, never from a boundary
   condition, so the free-end null stays an independent check of it.
+
+- **2026-09-25: one folder per case.** `config.toml` was split into
+  `defaults.toml` (numerics, `eta`) and one `case.toml` per folder under
+  `cases/simulations/`, `cases/identifications/` and `cases/analyses/`; every
+  script takes the folder and writes only into it. The point was the silent
+  "last run wins" trap — one shared `dump.npz` and `bar_identified.npz` meant
+  an analysis could read another case's files. `requires` became `bars` (a
+  path), `file` became `data`, and a simulated calibration is two linked
+  folders, the identification inheriting the simulation's config. Verified
+  bit-identical against a pre-split baseline: all four dumps, both simulated
+  identifications, every reconstruction `.dat`; the two measured
+  `bar_identified.npz` differ only in their `case` field (the new folder
+  name).
 
 ## Open threads
 
@@ -153,12 +166,12 @@ repeated here; this file is only for what those do not record.
     `dispersion_table` (a `(freq, cp/c0)` ratio, anchored to `1.0` at DC)
     alongside the existing `table` (alpha). `identify_bar_tension.py` now
     calls it whenever `[.attenuation]` is configured (added for
-    `experiment_tension_bar_2`) and writes `dispersion_f_{b}`/`dispersion_{b}`
+    `identifications/tension_bar_2`) and writes `dispersion_f_{b}`/`dispersion_{b}`
     into `bar_identified.npz`; `reconstruct_interface.py` reads them into a new
     `DISP` (plus `--no-dispersion`, symmetric with `--no-attenuation`) and
     passes them through `reconstruct()`, `free_end()`, and the OTHER-bar call.
 
-    **Measured, on `experiment_tension_bar_2`'s `out` bar:** far-gauge-
+    **Measured, on `identifications/tension_bar_2`'s `out` bar:** far-gauge-
     predicted-from-near misfit drops **lossless 4.08e-02 -> alpha only
     2.49e-02 -> alpha+dispersion 1.82e-02** (`identify_bar_tension.py`'s own
     printed check). The artifact itself: comparing the same t = 500-750 µs
@@ -214,8 +227,8 @@ repeated here; this file is only for what those do not record.
     something specific to this one shot (asymmetric noise between `in-0`/
     `in-1`, a slightly non-planar strike, or the sweep's own optimum being
     pulled around by noise in that one window). **Shipped the pragmatic
-    fallback instead**, not the derived one: `[experiment_tension_bar_2.
-    position_override]` in config.toml sets `in-1 = 120.0` (tape) directly.
+    fallback instead**, not the derived one: `[position_override]` in
+    `cases/identifications/tension_bar_2/case.toml` sets `in-1 = 120.0` (tape) directly.
     `identify_bar_tension.py` applies it right after computing `id_pos`, prints
     the override plainly (`gauge positions` table then reads `error +0.000` for
     that gauge, by construction), and skips fitting that bar's own `alpha(f)`/
@@ -251,7 +264,7 @@ repeated here; this file is only for what those do not record.
     twice from an in-bar reference -- `identify_bar_tension.py` grew a
     diagnostic table of four independent, joint-free routes: direct-arrival
     lag on each bar's own two gauges, plus each out-bar gauge's own
-    free-end echo. On `experiment_tension_bar_2` all four agree closely
+    free-end echo. On `identifications/tension_bar_2` all four agree closely
     (`out-0`/`out-1` echo to 9.6e-4 relative), so averaging just those two
     echoes is a clean, better-than-`Q` measurement there. Tried as the new
     default, it broke `calibration_tension` (the simulated self-check): that
@@ -262,11 +275,11 @@ repeated here; this file is only for what those do not record.
     were left to average and one of them was the bad one. With no
     redundancy, that bad echo alone set `c0`, which then put a gauge at a
     negative position and crashed `separate()` (`x > 0` required). **Fix:
-    opt-in, not default.** `[<case>.use_only_out_for_c0]` in config.toml
+    opt-in, not default.** `use_only_out_for_c0` in a case's `case.toml`
     (`identify_bar_tension.py`, the "c0 -- FINAL" section) picks the route;
     `false` (default) keeps the old `Q`-average with its outlier rejection,
     `true` switches to the two-echo average and is set for
-    `experiment_tension_bar_2` only, where both echoes are confirmed to
+    `identifications/tension_bar_2` only, where both echoes are confirmed to
     agree. Never default this to `true` for a case whose two out-bar echoes
     have not been checked against each other first -- there is no rejection
     mechanism protecting it.
@@ -275,7 +288,7 @@ repeated here; this file is only for what those do not record.
     `[<case>.c0_route]`.** `use_only_out_for_c0 = true` anchored `c0` on the
     out-bar TAPE POSITIONS (`c0 = 2 (L_output - x_tape_k)/tau_k`) and then
     placed every gauge from `L_free_ref` instead. Two imported lengths where
-    the physics admits one, and on `experiment_tension_bar_2` they disagree:
+    the physics admits one, and on `identifications/tension_bar_2` they disagree:
     the out gauges came back **58.3 and 69.2 mm** from the same tape that had
     just set `c0`. That gap was read as an identification error for a while.
     It is not -- it is the two tape statements contradicting each other, and
@@ -283,7 +296,7 @@ repeated here; this file is only for what those do not record.
     gauges.
 
     `c0_route = "out_echo_diff"` is the fix and is what
-    `experiment_tension_bar_2` now uses. `c0 = 2 D_out/(tau_out0 - tau_out1)`,
+    `identifications/tension_bar_2` now uses. `c0 = 2 D_out/(tau_out0 - tau_out1)`,
     the two out-bar round trips DIFFERENCED, so `L_output` cancels with the
     free end and the only imported number is the out-bar gauge SPACING
     (1077 mm). Every distance then comes from that gauge's own round trip,

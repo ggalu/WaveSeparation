@@ -1,0 +1,60 @@
+# kind = "identification" of a SIMULATED shot. The record is the dump.npz of
+# the simulation folder named below, and that simulation's own configuration
+# (bars, coupler, gauges, numerics) is inherited underneath the keys here.
+#
+#   python3 simulate.py cases/simulations/calibration_tension
+#   python3 identify_bar_tension.py cases/identifications/calibration_tension
+#
+# writes bar_identified.npz into this folder.
+kind = "identification"
+method = "tension"
+simulation = "../../simulations/calibration_tension"
+
+# THE one measured length. A strain record is invariant under
+# (all lengths, c0) -> (lambda * all lengths, lambda * c0), so the shot fixes
+# the geometry only up to one overall scale and exactly one length must come
+# from outside. This is it: gauge -> far free end, by tape.
+#
+# It is a DISTANCE in mm, the same family as the dump's L_free_in / L_free_out
+# but measured to a gauge rather than to a bar face. It has nothing to do with
+# the complex wavenumber xi = (w - i eta)/c_p of the separation theory, which is
+# a different quantity in different units -- these keys were called xi_ref* up
+# to 2026-08-16 and that collision is why they are not any more.
+#
+# Omit L_free_ref entirely and identify_bar_tension.py falls back to the model's
+# own geometry, which a simulation can supply and a rig cannot -- that is the
+# self-check mode, not the instrument. Override either value on the command line
+# (--l-free-ref / --l-free-ref-tol) to sweep sensitivity without editing this
+# file.
+#
+# NOTE this value depends on the gauge layout and the bar lengths above. Change
+# either and it goes stale; the script cross-checks it against the model
+# geometry and warns when the two disagree by more than L_free_ref_tol.
+L_free_ref = 3679.5               # in-1 -> far free end [mm]
+L_free_ref_gauge = "in-1"         # which gauge the tape reached. Any gauge will
+                                  # do -- the script refers it to whichever one
+                                  # the record picks as reference -- but the
+                                  # longest baseline gives the best leverage.
+                                  # Omit to mean "whichever is the reference".
+L_free_ref_tol = 2.0              # what the tape is actually good to [mm].
+                                  # Propagated to every result; it dominates.
+
+# Free-end null test. The far end of the output bar is a free surface, so the
+# stress there is zero and the two separated waves must cancel. It is the only
+# check in identify_bar_tension.py that consults no ground truth, so it is the
+# only one that still works on a rig.
+null_window = 0.75                # fraction of the record to keep. The tail MUST
+                                  # be cut: the exponential window amplifies the
+                                  # record-end truncation and inflates the
+                                  # residual ~100x on a calibration that is good.
+null_tol = 2.5e-3                 # pass threshold on the rms residual. Measured:
+                                  #   7.9e-4  floor, exact inputs (dispersion)
+                                  #   1.2e-3  a good identification
+                                  #   3.5e-3  150 mm coupler at 0.9 rho
+                                  #   2.6e-2  a 1 % uniform transit-time error
+                                  # i.e. ~3x the floor, which separates good from
+                                  # the mismatched coupler by only 2.9x. This is
+                                  # a coarse screen, not a precision check. On a
+                                  # real bar Pochhammer-Chree dispersion raises
+                                  # the floor: measure it with known-good numbers
+                                  # and set this to ~3x what you get.

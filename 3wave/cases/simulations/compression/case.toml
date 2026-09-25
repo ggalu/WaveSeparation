@@ -1,0 +1,47 @@
+# kind = "simulation": a model to integrate.
+#
+#   python3 simulate.py cases/simulations/compression
+#
+# writes dump.npz (and the specimen ground truth, specimen.dat) into this folder.
+kind = "simulation"
+model = "compression"
+
+# ==========================================================================
+# COMPRESSION: 1D direct-impact bar (simulate_compression.py)
+# A moving input bar strikes a specimen resting against a stationary output bar.
+# ==========================================================================
+loading = "compression"
+gauges = [130.0, 530.0]           # gauge distance from the interface [mm]
+
+# The two bars are separate tables because they are no longer the same bar.
+# Everything downstream that says "the bar" means the INPUT bar: the dump's
+# E / A / rho / c0 are written from [compression.input_bar].
+[input_bar]           # aluminium
+E = 70.0
+rho = 2.7e-6
+diameter = 16.0
+L_input = 2000.0
+initial_velocity = 10.0           # the input bar arrives at this speed
+
+# Polycarbonate output bar: the standard trick for a soft specimen. Its
+# impedance rho*c is 0.12x the aluminium's, so the transmitted signal is ~8x
+# larger for the same specimen force and does not disappear into the noise.
+# c = sqrt(E/rho) = 1384 mm/ms, a quarter of the aluminium's 5092.
+#
+# It is SHORT on purpose. A PC bar long enough to time-separate the pulses
+# would be absurd, so 1000 mm is what a real rig looks like -- and separating
+# the overlapped waves is what this code is for.
+[output_bar]          # polycarbonate
+E = 2.3
+rho = 1.2e-6
+diameter = 16.0
+L_output = 1000.0
+
+[specimen]
+diameter = 3.0
+length = 4.0
+E = 2.4
+JC_A = 0.06                       # Johnson-Cook A
+JC_B = 0.16                       # Johnson-Cook B
+JC_n = 0.3                        # Johnson-Cook n
+elastic_only = false              # true disables the specimen's plasticity

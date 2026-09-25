@@ -78,17 +78,18 @@ __all__ = ['load_experiment']
 US_PER_MS = 1.0e3
 
 
-def load_experiment(case, path=None):
+def load_experiment(cfg, path=None):
     """
-    Read one measured shot named by a config case.
+    Read one measured shot described by a case folder.
 
     Parameters
     ----------
-    case : str
-        A member of config.EXPERIMENT_CASES.
+    cfg : dict or path
+        A loaded case config with a `data` record (an identification of a
+        measured shot, or an analysis), or the case folder itself.
     path : str, optional
-        Override the data file named in the config, e.g. to run the same
-        geometry against a second shot.
+        Override the record named by `data`, e.g. to run the same geometry
+        against a second shot.
 
     Returns
     -------
@@ -120,14 +121,10 @@ def load_experiment(case, path=None):
         Deliberately ABSENT: c0_in, c0_out, E_in, E_out, force_iface_*, spec_*.
         Nothing here knows them.
     """
-    cfg = config.load(case)
-    src = path if path is not None else cfg['file']
-    if not os.path.isabs(src):
-        src = os.path.join(os.path.dirname(config.DEFAULT_PATH), src)
-    if not os.path.exists(src):
-        raise FileNotFoundError(
-            f'{case}: {src} not found. config.toml names it as "file"; paths '
-            'are taken relative to config.toml, not to the working directory.')
+    if not isinstance(cfg, dict):
+        cfg = config.load(cfg)
+    case = cfg['case']
+    src = path if path is not None else config.resolve(cfg, 'data')
 
     raw = np.loadtxt(src)
     cols = dict(cfg['columns'])

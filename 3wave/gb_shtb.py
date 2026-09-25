@@ -1,7 +1,8 @@
 import sys, numpy as np
 sys.path.insert(0, '.')
 import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
-from experiment import load_experiment
+import cases
+import config
 from wave_separation import separate, separate_time_domain
 
 def gb(sg1, sg2, fs, x1, x2, xt, c0, alpha_fac=0.05):
@@ -17,8 +18,10 @@ def gb(sg1, sg2, fs, x1, x2, xt, c0, alpha_fac=0.05):
     return (np.real(np.fft.ifft(A * np.exp(-g * d)))[:N],
             np.real(np.fft.ifft(B * np.exp(g * d)))[:N])
 
-ID = np.load('bar_identified.npz', allow_pickle=True)
-d = load_experiment('SHTB_PC'); t, dt = d['t'], d['dt']; eta = d['eta']
+# usage: python3 gb_shtb.py [CASE_DIR] [OUT.png]   (default cases/analyses/SHTB_PC)
+CFG = config.load(sys.argv[1] if len(sys.argv) > 1 else 'cases/analyses/SHTB_PC')
+ID = cases.identification(CFG)
+d = cases.record(CFG); t, dt = d['t'], d['dt']; eta = d['eta']
 thr = 0.05
 F = {}
 for b in ('in', 'out'):
@@ -56,4 +59,4 @@ for k in ('GB a=0.05/dx', 'separate, lossless', 'separate, att+disp (project def
     ax[2].plot(tu, F['in'][k] - F['out'][k], label=k)
 ax[2].set_ylabel('F_in - F_out [N]'); ax[2].set_xlabel('t [us]'); ax[2].legend(fontsize=8); ax[2].grid(alpha=.3)
 fig.suptitle('SHTB_PC: GB separate_waves_nodisp vs this project')
-fig.tight_layout(); fig.savefig(sys.argv[1] if len(sys.argv) > 1 else 'gb_shtb.png', dpi=110)
+fig.tight_layout(); fig.savefig(sys.argv[2] if len(sys.argv) > 2 else cases.output(CFG, 'gb_shtb.png'), dpi=110)
