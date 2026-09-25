@@ -117,6 +117,13 @@ def _validate(cfg, case, path):
     if cfg.get('loading') not in ('compression', 'tension'):
         raise ValueError(f"{where}: loading must be 'compression' or 'tension'")
 
+    # Bar face -> specimen, through whatever holds the specimen; the analysis
+    # reconstructs there instead of at the face. Optional, default 0.
+    h = cfg.get('holder_length', 0.0)
+    if not isinstance(h, (int, float)) or isinstance(h, bool) or h < 0:
+        raise ValueError(f'{where}: holder_length must be a number >= 0 [mm]; '
+                         f'got {h!r}')
+
     if case in EXPERIMENT_CASES:
         _validate_experiment(cfg, where)
         return

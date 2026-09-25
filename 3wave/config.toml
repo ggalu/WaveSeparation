@@ -204,6 +204,9 @@ length = 0.0
 [tension]
 loading = "tension"
 gauges = [130.0, 530.0]
+holder_length = 0.0               # mm, bar face -> specimen, same on both
+                                  # bars; 0 = specimen directly on the bars.
+                                  # See [SHTB_PC].
 
 # The two bars are IDENTICAL here -- this is a conventional symmetric SHTB.
 # They are still written as two tables because every case has the same shape:
@@ -267,6 +270,9 @@ JC_n = 0.3
 # ==========================================================================
 [calibration_tension]
 loading = "tension"
+holder_length = 0.0               # mm, bar face -> specimen, same on both
+                                  # bars; 0 = specimen directly on the bars.
+                                  # See [SHTB_PC].
 gauges = [130.0, 530.0]           # the layout being calibrated. The identify
                                   # script is never told these and recovers them
 
@@ -550,6 +556,9 @@ tol = 6.0e-2
 # --------------------------------------------------------------------------
 [experiment_tension_bar]
 loading = "tension"               # tension POSITIVE, matching [tension]
+holder_length = 0.0               # mm, bar face -> specimen, same on both
+                                  # bars; 0 = specimen directly on the bars.
+                                  # See [SHTB_PC].
 file = "data/SHTB_calibration_2026-09-02.txt"
 units = "N"                       # this file is Newtons, not kN like the PC one
 
@@ -618,6 +627,9 @@ tol = 2.5e-3
 # --------------------------------------------------------------------------
 [experiment_tension_bar_2]
 loading = "tension"
+holder_length = 0.0               # mm, bar face -> specimen, same on both
+                                  # bars; 0 = specimen directly on the bars.
+                                  # See [SHTB_PC].
 file = "data/SHTB_calibration_2026-09-02_2.txt"
 units = "N"
 gauges = [935.00, 119.00, 123.00, 1200.00]
@@ -739,6 +751,17 @@ file = "data/SHTB_PC_2026-09-03.txt"
 #file = "data/SHTB_PTO1.txt"
 units = "N"
 interface = "specimen"
+
+# The specimen sits in an aluminium holder screwed onto each bar face (bar
+# material; 60 mm at 16 mm then 40 mm at 13 mm, by drawing). The force at a bar
+# FACE also accelerates the holder -- the 8.5 kN spike F_in shows there, which
+# the ~2 kN specimen never carries -- so reconstruct_interface.py reports the
+# force at x = -holder_length, on BOTH bars, treating the holder as more bar.
+# 106 mm rather than the drawing's 100: it is the input-bar face shift that
+# force equilibrium alone selects (106-110 mm across windows), and it scores
+# better than the stepped 60@16 | 40@13 model of the same holder. Its sliders
+# move the plane relative to this one.
+holder_length = 106.0
 
 gauges = [935.00, 119.00, 119.00, 1199.00]  # tape, carried over unchanged from
                                              # [experiment_tension_bar_2] -- see

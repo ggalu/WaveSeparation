@@ -1794,6 +1794,37 @@ a positive offset. **A second shot with a short striker separates the two** —
 with every echo isolated and the bars parted long before `2L/c`, the contact-end
 reflection is a genuine free surface and the offset should vanish.
 
+## Specimen holders: `holder_length`
+
+The force at a bar face is the force on the specimen only when the specimen is
+attached straight to the face. On `SHTB_PC` it sits in an aluminium holder screwed
+onto each face, and the face force also accelerates the holder. Against a specimen
+this soft the input-bar end reaches about 10 m/s within about 50 µs, and `m·a` of
+the holder is kilonewtons. That is the 8.5 kN spike `F_in` shows at the incident
+front, which the specimen, peaking at about 2 kN, never carries.
+
+The SHTB cases therefore carry `holder_length` (mm, bar face to specimen, the same
+on both bars, `0` for a specimen directly on the bars). `reconstruct_interface.py`
+reports `F_in`/`F_out` at `x = −holder_length`, in the force panels, the
+equilibrium panel and the `.dat`. It gets there with `separate_field`, which treats
+the holder as more of the same bar. The causality, echo, tensile and free-end
+checks belong to the bars' own boundaries and stay at the faces. Each bar's slider
+is measured from that specimen plane: 0 is the holder/specimen interface, and
+`+holder_length` is the bar face. With `holder_length = 0` the output is identical
+to before (max difference 0.0 on `experiment_tension_bar_2`).
+
+`SHTB_PC` uses 106 mm, not the drawing's 100 mm (60 mm at 16 mm, then 40 mm at
+13 mm). 106 mm is the input-bar face shift that force equilibrium alone selects,
+106–110 mm across time windows. It also scored better than modelling the 13 mm
+neck's impedance step explicitly.
+
+| forces at | mean \|F_in − F_out\| / peak | max |
+|---|---|---|
+| bar faces (`holder_length = 0`) | 0.403 | 4.17 |
+| `holder_length = 106` | 0.093 | 0.42 |
+
+`reconstruct_TD.py` does not read `holder_length` yet.
+
 ## Accuracy and time integration
 
 Both simulators use explicit leapfrog on a lumped mass-spring chain. That is a

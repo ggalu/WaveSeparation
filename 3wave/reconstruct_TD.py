@@ -37,15 +37,13 @@ the closest lossless comparison).
 --------------------------------------------------------------------------
 The slider, on BOTH bars
 --------------------------------------------------------------------------
-reconstruct_interface.py's slider only ever sits on the left-hand column,
-whichever bar that happens to be, because `separate_field`'s FFT-based field
-synthesis is the expensive part and one instance was enough to demonstrate it.
-`separate_time_domain_field` is nothing but linear interpolation into an
-already-computed pair of 1-D arrays, so it costs nothing to give every bar
-its own slider -- moving the input-bar reconstruction and the output-bar
-reconstruction independently, off their respective interfaces, while the
-force-equilibrium panel (when both bars are identified) tracks whichever one
-last moved.
+As in reconstruct_interface.py, every bar gets its own slider -- moving the
+input-bar reconstruction and the output-bar reconstruction independently, off
+their respective interfaces, while the force-equilibrium panel (when both bars
+are identified) tracks whichever one last moved. Here each move is nearly
+free: `separate_time_domain_field` is nothing but linear interpolation into an
+already-computed pair of 1-D arrays, where reconstruct_interface.py re-runs
+`separate_field`'s FFT-based field synthesis on every step.
 
 --------------------------------------------------------------------------
 What the figure shows
