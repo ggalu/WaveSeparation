@@ -7,8 +7,8 @@ to show what the gauges actually record, and in particular WHEN the two
 counter-propagating waves start to overlap at each gauge.
 
 Run simulate.py on a simulation folder first to produce its dump.npz, then:
-    python3 plot_forces.py cases/simulations/tension              # window
-    python3 plot_forces.py cases/simulations/tension --headless   # .png only
+    python3 simulation_code/plot_forces.py cases/simulations/tension              # window
+    python3 simulation_code/plot_forces.py cases/simulations/tension --headless   # .png only
 
 The figure is always written to gauge_forces.png either way. --headless is also
 implied by MPL_HEADLESS=1 or by there being no display, so the script is safe to
@@ -19,18 +19,23 @@ compression data is plotted compression-positive and tension data
 tension-positive.
 """
 import argparse
+import os
+import sys
 
 import numpy as np
 
-import plotting
+if __package__ in (None, ''):   # run as a script: put 3wave/ on the path
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from wave_separation_code import plotting
 _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 _ap.add_argument('case', help='a simulation folder under cases/simulations/ (run simulate.py on it first)')
 HEADLESS, ARGS = plotting.init(parser=_ap)   # picks the backend; precedes pyplot
 import matplotlib.pyplot as plt
 
-import cases
-import config
+from wave_separation_code import cases
+from wave_separation_code import config
 
 # --- load ------------------------------------------------------------------
 # see dump.py for the full definition of each entry

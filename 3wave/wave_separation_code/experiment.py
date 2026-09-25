@@ -1,7 +1,7 @@
 """
 Load a MEASURED shot into the same dict shape that dump.npz produces.
 
-    from experiment import load_experiment
+    from wave_separation_code.experiment import load_experiment
     d = load_experiment('experiment_pc_bar')
 
 This is the half of rig readiness NOTES.md left open: `--l-free-ref` made the
@@ -71,7 +71,7 @@ import os
 
 import numpy as np
 
-import config
+from . import config
 
 __all__ = ['load_experiment']
 

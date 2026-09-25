@@ -5,26 +5,31 @@ validated against the simulator's own specimen measurement.
 Run simulate.py on a simulation folder first to produce its dump.npz. Gauge
 locations and eta come from that case's case.toml (and defaults.toml). Then:
 
-    python3 reduce_specimen.py cases/simulations/tension              # window
-    python3 reduce_specimen.py cases/simulations/tension --headless   # .png only
+    python3 simulation_code/reduce_specimen.py cases/simulations/tension              # window
+    python3 simulation_code/reduce_specimen.py cases/simulations/tension --headless   # .png only
 
 The figure is always written to specimen_reconstruction.png either way.
 --headless is also implied by MPL_HEADLESS=1 or by there being no display,
 so the script is safe to run over ssh or from a batch job.
 """
 import argparse
+import os
+import sys
 
 import numpy as np
 
-import plotting
+if __package__ in (None, ''):   # run as a script: put 3wave/ on the path
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from wave_separation_code import plotting
 _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 _ap.add_argument('case', help='a simulation folder under cases/simulations/ (run simulate.py on it first)')
 HEADLESS, ARGS = plotting.init(parser=_ap)   # picks the backend; precedes pyplot
 
-import cases
-import config
-from wave_separation import separate, bar_interface, specimen_response
+from wave_separation_code import cases
+from wave_separation_code import config
+from wave_separation_code.wave_separation import separate, bar_interface, specimen_response
 
 # --- load ------------------------------------------------------------------
 # One file, and the gauge signals arrive with their exact positions already

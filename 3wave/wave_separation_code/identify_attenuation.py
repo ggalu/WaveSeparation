@@ -2,7 +2,7 @@
 Identify a bar's ATTENUATION alpha(f) from two gauges on it, using no boundary
 condition and no ground truth.
 
-    from identify_attenuation import fit_attenuation
+    from wave_separation_code.identify_attenuation import fit_attenuation
     att = fit_attenuation(t, signals, positions, f1, f2)
     P, M = separate(t, signals, positions, c0=c, eta=eta,
                     attenuation=att['table'])

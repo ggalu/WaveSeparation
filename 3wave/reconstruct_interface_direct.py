@@ -100,7 +100,7 @@ import argparse
 
 import numpy as np
 
-import plotting
+from wave_separation_code import plotting
 
 _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -119,9 +119,9 @@ _ap.add_argument('--c0', type=float, default=None, metavar='MM/MS',
                       '"Optimizing positions against a known c0" below.')
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
-import cases
-import config
-from wave_separation import separate
+from wave_separation_code import cases
+from wave_separation_code import config
+from wave_separation_code.wave_separation import separate
 
 cfg = config.load(ARGS.case)
 CASE = cfg['case']

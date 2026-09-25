@@ -7,7 +7,7 @@ forces the ordering: the backend has to be chosen BEFORE pyplot is imported, so
 the argument parsing has to happen at the top of the file even though the
 plotting is at the bottom. That is the whole reason this lives in a helper.
 
-    import plotting
+    from wave_separation_code import plotting
     HEADLESS = plotting.init(__doc__)     # parse --headless, pick the backend
     import matplotlib.pyplot as plt       # only now
     ...

@@ -6,16 +6,22 @@ layouts are given as INDEX subsets into the gauge list configured in
 case.toml, so this adapts to whatever gauges the dump happens to carry.
 
     python3 simulate.py cases/simulations/compression
-    python3 gauge_count_study.py cases/simulations/compression
+    python3 simulation_code/gauge_count_study.py cases/simulations/compression
 """
+import argparse
+import os
+import sys
+
 import numpy as np
 
-import argparse
+if __package__ in (None, ''):   # run as a script: put 3wave/ on the path
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cases
-import config
-from wave_separation import (separate, backpropagate, bar_interface,
-                             specimen_response, single_wave_window)
+from wave_separation_code import cases
+from wave_separation_code import config
+from wave_separation_code.wave_separation import (
+    separate, backpropagate, bar_interface, specimen_response,
+    single_wave_window)
 
 _ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
 _ap.add_argument('case', help='a simulation folder under cases/simulations/ (run simulate.py on it first)')

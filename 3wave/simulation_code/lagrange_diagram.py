@@ -2,7 +2,7 @@
 Lagrange (x-t) diagram of the SEPARATED waves, across the whole assembly.
 
     python3 simulate.py cases/simulations/tension
-    python3 lagrange_diagram.py cases/simulations/tension [--headless]
+    python3 simulation_code/lagrange_diagram.py cases/simulations/tension [--headless]
 
 Every other figure in this folder shows the separated waves as time series at
 one plane. This one shows them as FIELDS: each bar is separated from its own
@@ -61,11 +61,16 @@ boundary conditions. So the mask follows from the materials, not from the ends:
     boundaries, so nothing about the reconstruction changes there.
 """
 import argparse
+import os
+import sys
 import textwrap
 
 import numpy as np
 
-import plotting
+if __package__ in (None, ''):   # run as a script: put 3wave/ on the path
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from wave_separation_code import plotting
 
 # argparse owns the whole command line and the backend must be picked before
 # pyplot is imported, so both happen up here -- see plotting.py.
@@ -87,9 +92,9 @@ _ap.add_argument('--chunk', type=int, default=64, metavar='N',
                       'Default 64.')
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
-import cases
-import config
-from wave_separation import separate_field
+from wave_separation_code import cases
+from wave_separation_code import config
+from wave_separation_code.wave_separation import separate_field
 
 cfg = config.load(ARGS.case)
 if cfg['kind'] != 'simulation':

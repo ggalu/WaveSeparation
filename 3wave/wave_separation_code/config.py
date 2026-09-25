@@ -2,7 +2,7 @@
 Loader for the per-case configuration: one folder per case under cases/, each
 with its own case.toml, on top of the shared defaults.toml.
 
-    import config
+    from wave_separation_code import config
     cfg = config.load('cases/simulations/tension')
 
     cfg['input_bar']['E']    # material and geometry, as written in the file
@@ -55,7 +55,8 @@ import tomllib
 __all__ = ['load', 'resolve', 'measured', 'bar_lengths', 'KINDS', 'BAR_TABLES',
            'ROOT', 'DEFAULTS_PATH', 'CASE_FILE']
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+# 3wave/, the folder above this package: defaults.toml and cases/ live there.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULTS_PATH = os.path.join(ROOT, 'defaults.toml')
 CASE_FILE = 'case.toml'
 

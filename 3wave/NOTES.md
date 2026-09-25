@@ -62,6 +62,19 @@ repeated here; this file is only for what those do not record.
   identifications, every reconstruction `.dat`; the two measured
   `bar_identified.npz` differ only in their `case` field (the new folder
   name).
+- **2026-09-25: code split into two packages.** The library (the separation,
+  attenuation fit, config/cases/experiment/dump/recording/plotting, frozen
+  `wsep.py`) moved to `wave_separation_code/`, with relative imports inside it.
+  The simulators and the simulation-only analysis scripts moved to
+  `simulation_code/`, which are run by path (`python3
+  simulation_code/reduce_specimen.py <case>`) through a two-line `sys.path`
+  bootstrap. The real-data scripts and `simulate.py` stay at the top.
+  `config.ROOT` is now the package's parent directory. Removed:
+  `2waves_deconvolution_GB.md` (GB's MATLAB; `gb_shtb.py` keeps the port),
+  plus the stray `fourier.dat`, `td.dat` and `resume.txt`. Every output of
+  every script is identical to a pre-move baseline (45 files, arrays and
+  `.dat` bytes). `sep_test.py` failed before the move and still does: `wsep.py`
+  needs three gauges per bar, and the simulation cases now have two.
 
 ## Open threads
 

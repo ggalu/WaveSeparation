@@ -1,12 +1,12 @@
 import sys, numpy as np
-sys.path.insert(0, '.')
 import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
-import cases
-import config
-from wave_separation import separate, separate_time_domain
+from wave_separation_code import cases
+from wave_separation_code import config
+from wave_separation_code.wave_separation import separate, separate_time_domain
 
 def gb(sg1, sg2, fs, x1, x2, xt, c0, alpha_fac=0.05):
-    """Verbatim port of separate_waves_nodisp (2waves_deconvolution_GB.md)."""
+    """Verbatim port of GB's MATLAB separate_waves_nodisp (its source,
+    2waves_deconvolution_GB.md, was removed; see git history)."""
     N = len(sg1); Nf = int(2 ** np.ceil(np.log2(3 * N)))
     f = fs * np.arange(Nf) / Nf; w = 2 * np.pi * f
     w[Nf // 2 + 1:] -= 2 * np.pi * fs

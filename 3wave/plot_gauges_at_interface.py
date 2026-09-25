@@ -44,7 +44,7 @@ import argparse
 
 import numpy as np
 
-import plotting
+from wave_separation_code import plotting
 
 _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -57,9 +57,9 @@ _ap.add_argument('--no-attenuation', action='store_true',
                  help='shift with a lossless bar, i.e. a pure time delay.')
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
-import cases
-import config
-from wave_separation import separate, backpropagate, wavefront_time
+from wave_separation_code import cases
+from wave_separation_code import config
+from wave_separation_code.wave_separation import separate, backpropagate, wavefront_time
 
 cfg = config.load(ARGS.case)
 if cfg['kind'] == 'simulation':

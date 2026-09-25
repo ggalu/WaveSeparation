@@ -174,7 +174,7 @@ import argparse
 
 import numpy as np
 
-import plotting
+from wave_separation_code import plotting
 
 # argparse has to own the whole command line, and the backend has to be chosen
 # before pyplot is imported, so both happen here at the top -- see plotting.py.
@@ -197,9 +197,9 @@ _ap.add_argument('case',
                       'no ground truth, so the true/error columns print a dash.')
 HEADLESS, ARGS = plotting.init(parser=_ap)   # picks the backend; precedes pyplot
 
-import cases
-import config
-from wave_separation import separate
+from wave_separation_code import cases
+from wave_separation_code import config
+from wave_separation_code.wave_separation import separate
 
 cfg = config.load(ARGS.case)
 if cfg['kind'] != 'identification' or cfg['method'] != 'tension':
@@ -1002,7 +1002,7 @@ for k, nm in enumerate(names):
 # -- so the output bar's fit is simply carried over rather than re-derived.
 ATT = {}
 if EXPERIMENT and 'attenuation' in cfg:
-    from identify_attenuation import fit_attenuation
+    from wave_separation_code.identify_attenuation import fit_attenuation
     ac = cfg['attenuation']
     print('\n--- attenuation and dispersion, from the output bar\'s two '
           'gauges alone ------')

@@ -19,9 +19,9 @@ import os
 
 import numpy as np
 
-import config
-from dump import DUMP_FILE, load_dump
-from experiment import load_experiment
+from . import config
+from .dump import DUMP_FILE, load_dump
+from .experiment import load_experiment
 
 __all__ = ['record', 'identification', 'bars_dir', 'output', 'rel',
            'IDENT_FILE']

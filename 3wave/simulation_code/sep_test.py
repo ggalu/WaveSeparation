@@ -10,15 +10,20 @@ actually carried in the bar element at each specimen face, which the dump stores
 as ground truth.
 
     python3 simulate.py cases/simulations/tension
-    python3 sep_test.py cases/simulations/tension
+    python3 simulation_code/sep_test.py cases/simulations/tension
 """
+import argparse
+import os
+import sys
+
 import numpy as np
 
-import argparse
+if __package__ in (None, ''):   # run as a script: put 3wave/ on the path
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cases
-import config
-from wsep import wave_separation
+from wave_separation_code import cases
+from wave_separation_code import config
+from wave_separation_code.wsep import wave_separation
 
 _ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
 _ap.add_argument('case', help='a simulation folder under cases/simulations/ (run simulate.py on it first)')

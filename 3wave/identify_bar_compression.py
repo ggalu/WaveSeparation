@@ -74,7 +74,7 @@ import argparse
 
 import numpy as np
 
-import plotting
+from wave_separation_code import plotting
 
 _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -94,9 +94,9 @@ _ap.add_argument('case',
                       'no ground truth, so the true/error columns print a dash.')
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
-import cases
-import config
-from wave_separation import separate
+from wave_separation_code import cases
+from wave_separation_code import config
+from wave_separation_code.wave_separation import separate
 
 cfg = config.load(ARGS.case)
 if cfg['kind'] != 'identification' or cfg['method'] != 'compression':
@@ -511,7 +511,7 @@ for b in BARS:
 # stays an independent check of it rather than its objective.
 ATT = {b: None for b in BARS}
 if EXPERIMENT and 'attenuation' in cfg:
-    from identify_attenuation import fit_attenuation
+    from wave_separation_code.identify_attenuation import fit_attenuation
     ac = cfg['attenuation']
     print('\n--- attenuation, from the two gauges alone '
           '--------------------------')

@@ -70,7 +70,7 @@ import argparse
 
 import numpy as np
 
-import plotting
+from wave_separation_code import plotting
 
 _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -85,10 +85,10 @@ _ap.add_argument('--bar', default=None,
                       'are reconstructed and get a slider regardless.')
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
-import cases
-import config
-from wave_separation import (separate_time_domain, separate_time_domain_field,
-                             wavefront_time)
+from wave_separation_code import cases
+from wave_separation_code import config
+from wave_separation_code.wave_separation import (
+    separate_time_domain, separate_time_domain_field, wavefront_time)
 
 cfg = config.load(ARGS.case)
 if cfg['kind'] == 'simulation':

@@ -28,11 +28,15 @@
 # Units: mm, ms, kg  =>  kN, GPa, and mm/ms (numerically equal to m/s).
 
 import os
+import sys
 
 import numpy as np
 
-import config as _config
-from recording import GaugeRecorder
+if __package__ in (None, ''):   # run as a script: put 3wave/ on the path
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from wave_separation_code import config as _config
+from wave_separation_code.recording import GaugeRecorder
 
 
 class SimulateDirectImpact:

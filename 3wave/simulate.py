@@ -16,10 +16,10 @@ Never run a simulate_*.py directly: it produces no dump.
 """
 import argparse
 
-import config
-import simulate_compression
-import simulate_tension
-from dump import write_dump
+from wave_separation_code import config
+from simulation_code import simulate_compression
+from simulation_code import simulate_tension
+from wave_separation_code.dump import write_dump
 
 _ap = argparse.ArgumentParser(
     description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
