@@ -37,7 +37,7 @@ the case multi-gauge separation exists for.
 
 ```
 *.py                  the scripts you run on real data: identify_bar_*.py,
-                      reconstruct_*.py, bar_equilibrium.py, ... and simulate.py
+                      reconstruct_interface.py, ... and simulate.py
 simulation_code/      the two simulators, and the scripts that analyse a
                       simulated shot (reduce_specimen.py, plot_forces.py, ...)
 wave_separation_code/ the library every script imports: wave_separation.py
@@ -70,7 +70,7 @@ cases/
 |---|---|---|---|
 | `simulation` | a model; `model = "compression"` or `"tension"` picks the simulator | none — it writes `dump.npz` | `simulate.py`, then `simulation_code/reduce_specimen.py`, `plot_forces.py`, `lagrange_diagram.py` |
 | `identification` | a no-specimen shot the bar properties are identified from; `method` picks the script | `data` (a measured file in the folder) **or** `simulation` (a simulation folder whose `dump.npz` it reads, and whose configuration it inherits) | `identify_bar_tension.py` / `identify_bar_compression.py` → `bar_identified.npz` |
-| `analysis` | a measured shot with a specimen | `data`, and `bars` naming the identification folder its `c0`, positions, `α(f)` and `c_p(f)` come from | `reconstruct_interface.py`, `reconstruct_TD.py`, … |
+| `analysis` | a measured shot with a specimen | `data`, and `bars` naming the identification folder its `c0`, positions, `α(f)` and `c_p(f)` come from | `reconstruct_interface.py`, `time_shift_output_gauges_to_interface.py` |
 
 The cases in the repository:
 
@@ -1780,8 +1780,8 @@ are referred back to the **source file's** time base via `t0_file`.
 ### One gauge is enough, until it is not
 
 ```bash
-python3 plot_gauges_at_interface.py cases/identifications/pc_bar   # calibration shot
-python3 plot_gauges_at_interface.py cases/analyses/pc_specimen
+python3 time_shift_output_gauges_to_interface.py cases/identifications/pc_bar   # calibration shot
+python3 time_shift_output_gauges_to_interface.py cases/analyses/pc_specimen
 ```
 
 ![Each gauge shifted to the interface on its own](cases/analyses/pc_specimen/gauges_at_interface.png)
@@ -1875,8 +1875,6 @@ neck's impedance step explicitly.
 |---|---|---|
 | bar faces (`holder_length = 0`) | 0.403 | 4.17 |
 | `holder_length = 106` | 0.093 | 0.42 |
-
-`reconstruct_TD.py` does not read `holder_length` yet.
 
 ## Accuracy and time integration
 
@@ -1995,12 +1993,7 @@ specimen reduction, which is what the floor is actually made of.
 | `identify_bar_tension.py` | Recovers gauge positions, spacing `D` and `c0` from that shot's echo train. Needs one measured length, and `c0_route` picks which: `L_free_ref` in the identification's `case.toml` (or `--l-free-ref`) by default, the out-bar gauge spacing under `"out_echo_diff"` — that route reads two entries of the configured gauge list and nothing else from it. |
 | `identify_bar_compression.py` | Recovers each bar's gauge positions, spacing `D` and `c0` from that shot. Two bars, two wave speeds, two identifications. Needs one measured length **per bar** — each bar's own length, `L_free_in_ref` / `L_free_out_ref` in the identification's `case.toml`, or `--l-in-ref` / `--l-out-ref`. On an identification with a measured `data` record there is no ground truth, and only the bars that carry two gauges are identified. Writes `bar_identified.npz` into the identification folder. |
 | `reconstruct_interface.py` | **The deliverable for a real shot:** force at the impact interface, `F = P + M`, plus the four checks — free-end null, causality, unilateral contact, separation. Identifies nothing itself: `c0`, positions, `α(f)`, `c_p(f)` and the free-end distances all come from `bar_identified.npz` — the folder's own for an identification, its `bars` folder's for an analysis. Reports the force at `x = -holder_length`. Runs the identified and tape positions side by side. `--no-attenuation` / `--no-dispersion` for the lossless comparison. |
-| `plot_gauges_at_interface.py` | Each gauge shifted to `x = 0` alone (`backpropagate`) against the two-gauge separation, with each gauge's single-wave window `2(L-d)/c0`. Shows how much of a record needed two gauges, and what one gauge would have claimed past that. |
-| `identify_bar_tension_manual.py` | A slider per gauge over the tape positions, the two-gauge solve redrawn live. Closing the window writes the positions back into the case's `gauges`. |
-| `bar_equilibrium.py` | `F_in` against `F_out` across the coupler of an SHTB calibration shot, each bar separated on its own. |
-| `reconstruct_TD.py` | The interface force from the pure time-domain solve, `separate_time_domain`: no eta, no attenuation, no dispersion. A cross-check on the FFT route. Ignores `holder_length`. |
-| `reconstruct_interface_direct.py` | The SHTB coupler force straight from the record and the tape, with no identification step. |
-| `gb_shtb.py` | GB's MATLAB `separate_waves_nodisp`, ported and run on SHTB_PC beside this project's method, for comparison. |
+| `time_shift_output_gauges_to_interface.py` | Each gauge shifted to `x = 0` alone (`backpropagate`) against the two-gauge separation, with each gauge's single-wave window `2(L-d)/c0`. Shows how much of a record needed two gauges, and what one gauge would have claimed past that. |
 
 **Simulation entry point, in `3wave/`**
 
@@ -2055,8 +2048,8 @@ Generated at run time, inside the case folder the script was run on, and safe to
 delete (`./clean.sh`): `dump.npz`, `specimen.dat`, `specimen_reconstructed.dat`,
 `gauge_forces.png`, `specimen_reconstruction.png`, `lagrange_diagram.png` in a
 simulation folder; `bar_identified.npz`, `bar_identification.png` in an
-identification folder; `interface_force[_lossless].{png,dat}`,
-`interface_force_TD.*`, `bar_equilibrium.*` and the rest wherever they were run.
+identification folder; `interface_force[_lossless].{png,dat}`
+and `gauges_at_interface.png` wherever they were run.
 A case folder's inputs — `case.toml` and its record — are never touched.
 `clean.sh` also removes the superseded `eps.npy` / `force.npy` / `meta.npz` /
 `meta.npy`, and a `dump.npz` / `bar_identified.npz` an older revision left beside

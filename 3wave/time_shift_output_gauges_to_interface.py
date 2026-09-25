@@ -2,7 +2,7 @@
 Each gauge shifted to x = 0 ON ITS OWN, against the two-gauge separation.
 
     python3 identify_bar_compression.py cases/identifications/pc_bar
-    python3 plot_gauges_at_interface.py cases/analyses/pc_specimen [--headless]
+    python3 time_shift_output_gauges_to_interface.py cases/analyses/pc_specimen [--headless]
 
 One gauge gives one equation per frequency and there are two unknowns, so a
 single gauge cannot separate anything. What it CAN do is be shifted to the

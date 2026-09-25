@@ -225,28 +225,16 @@ The script writes `bar_identified.npz`, which the analysis reads, and
 
 ## A5. Optional: check the calibration shot itself
 
-These are worth running once on every new calibration:
+This is worth running once on every new calibration:
 
 ```bash
 python3 reconstruct_interface.py cases/identifications/my_shtb_cal   # F at each bar face, equilibrium, null
-python3 bar_equilibrium.py       cases/identifications/my_shtb_cal   # F_in vs F_out across the coupler
-python3 reconstruct_TD.py        cases/identifications/my_shtb_cal   # pure time-domain solve, as a cross-check
 ```
 
 A rigid coupler carries the same force on both sides, so `F_in ≈ F_out` is the
-check. On `tension_bar_2` the mean mismatch is 2.8 % of peak.
-
-**Adjusting positions by hand.** To nudge the tape positions and see what
-happens, run:
-
-```bash
-python3 identify_bar_tension_manual.py cases/identifications/my_shtb_cal
-```
-
-It gives one slider per gauge in 1 mm steps. **When you close the window it
-writes the slider positions back into `gauges` in that `case.toml`.** Commit or
-copy the file first if you want to keep the tape values. `--headless` never
-writes anything.
+check. `identify_bar_tension.py` already prints it as its last line ("force
+equilibrium across the coupler"). On `tension_bar_2` the mean mismatch is 2.8 %
+of peak.
 
 ## A6. Create the analysis folder for a specimen shot
 
@@ -355,20 +343,15 @@ reconstruction plane:
 Use them to see how sensitive equilibrium is to the plane. To make a better
 value permanent, change `holder_length`. The sliders never change the file.
 
-**Comparison runs:**
+**Comparison run:**
 
 ```bash
 python3 reconstruct_interface.py cases/analyses/my_specimen --no-attenuation --no-dispersion
-python3 reconstruct_TD.py        cases/analyses/my_specimen   # time domain, lossless
 ```
 
-- The first run shows what α(f) and c_p(f) contribute. It writes
-  `interface_force_lossless.*` next to the default outputs. With
-  `--no-dispersion` alone, it overwrites the default files.
-- `reconstruct_TD.py` needs at least twice the gauge-to-gauge transit time of
-  quiet record before the first arrival.
-- `reconstruct_TD.py` **does not read `holder_length` yet**. It reports at the
-  bar faces.
+This shows what α(f) and c_p(f) contribute. It writes
+`interface_force_lossless.*` next to the default outputs. With `--no-dispersion`
+alone, it overwrites the default files.
 
 ## A8. What you have now, and what is not there yet
 
@@ -557,7 +540,7 @@ the record is quiet.
 
 ```bash
 python3 reconstruct_interface.py cases/analyses/my_specimen
-python3 plot_gauges_at_interface.py cases/analyses/my_specimen   # optional
+python3 time_shift_output_gauges_to_interface.py cases/analyses/my_specimen   # optional
 ```
 
 It writes:
@@ -577,7 +560,7 @@ It writes:
 - **Two position sets.** The identified and tape positions should give almost
   the same force: 2 % L2 on `pc_specimen`.
 - **Causality `n/a`** is normal, because the specimen smooths the echo edge.
-- **`plot_gauges_at_interface.py`** shifts each gauge to the face on its own,
+- **`time_shift_output_gauges_to_interface.py`** shifts each gauge to the face on its own,
   which is what a classical single-gauge reduction does. It overlays that on the
   two-gauge separation. Where they agree, one gauge would have been enough.
   Where they peel apart, the single-gauge answer is wrong by the whole of the
@@ -605,7 +588,6 @@ It writes:
 | echo missing from the edge table | The record is too short (A1, B1) or clipped (see `clip_onset`). |
 | free-end null FAIL | The transit times are wrong: coupler, bar length, a re-bonded gauge or a stale calibration. It is not a tape-scale error, because the test cannot see one. |
 | slow rise before t = 0, null much worse than on the calibration | Late trigger. Use `baseline_before` and `start` (B6). |
-| `reconstruct_TD.py` refuses to run | Not enough quiet lead-in. Increase `[trim] lead`. |
 
 **eta.** The default is `eta = 1.0` /ms in `defaults.toml`. The force is
 insensitive to it above about 0.5 /ms. Do not lower it to make the force look

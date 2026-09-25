@@ -1396,9 +1396,9 @@ for col, (bar, off, cnt) in enumerate(COLS):
 # coupler, so the two curves are two INDEPENDENT measurements of one quantity
 # -- separate solves, separate gauges, sharing only c0 -- and where they part
 # company is the honest error bar on the whole identification. It is exactly
-# bar_equilibrium.py's number, computed here from this run's own numbers
-# (including the identified alpha(f)/c_p(f), which bar_equilibrium.py does not
-# apply) so the figure needs no second script to be read.
+# the coupler force equilibrium, computed here from this run's own numbers
+# (including the identified alpha(f)/c_p(f)) so the figure needs no second
+# script to be read.
 #
 # The two curves are NOT at the same place: they are one coupler apart, and
 # nothing here shifts either of them. On this rig that gap is the identified
@@ -1408,7 +1408,7 @@ if 'in' in F_BARS and 'out' in F_BARS:
     F_in_b, F_out_b = F_BARS['in'], F_BARS['out']
     _pk = float(np.abs(F_in_b).max())
     _eq = np.abs(F_in_b - F_out_b) / (_pk if _pk > 0 else 1.0)
-    # Same window convention as the free-end null and bar_equilibrium.py:
+    # Same window convention as the free-end null:
     # clear of the quiescent start, and of the tail the eta-window amplifies.
     _amp_e = max(_pk, float(np.abs(F_out_b).max()))
     _e0 = int(np.argmax((np.abs(F_in_b) + np.abs(F_out_b)) > 0.02 * _amp_e))

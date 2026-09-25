@@ -70,11 +70,20 @@ repeated here; this file is only for what those do not record.
   simulation_code/reduce_specimen.py <case>`) through a two-line `sys.path`
   bootstrap. The real-data scripts and `simulate.py` stay at the top.
   `config.ROOT` is now the package's parent directory. Removed:
-  `2waves_deconvolution_GB.md` (GB's MATLAB; `gb_shtb.py` keeps the port),
+  `2waves_deconvolution_GB.md` (GB's MATLAB),
   plus the stray `fourier.dat`, `td.dat` and `resume.txt`. Every output of
   every script is identical to a pre-move baseline (45 files, arrays and
   `.dat` bytes). `sep_test.py` failed before the move and still does: `wsep.py`
   needs three gauges per bar, and the simulation cases now have two.
+- **2026-09-25: five side scripts retired.** `bar_equilibrium.py`,
+  `gb_shtb.py`, `identify_bar_tension_manual.py`,
+  `reconstruct_interface_direct.py` and `reconstruct_TD.py` are deleted; they
+  are in git history before this date. The coupler equilibrium they checked is
+  printed and plotted by `identify_bar_tension.py` and
+  `reconstruct_interface.py`. `separate_time_domain` and
+  `separate_time_domain_field` stay in the library, now without a caller
+  outside it. `plot_gauges_at_interface.py` became
+  `time_shift_output_gauges_to_interface.py`.
 
 ## Open threads
 
