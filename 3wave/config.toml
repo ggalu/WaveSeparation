@@ -736,6 +736,7 @@ tol = 2.5e-3
 requires = "experiment_tension_bar_2"
 loading = "tension"
 file = "data/SHTB_PC_2026-09-03.txt"
+#file = "data/SHTB_PTO1.txt"
 units = "N"
 interface = "specimen"
 

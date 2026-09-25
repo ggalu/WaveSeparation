@@ -73,6 +73,7 @@ exp(+eta*t) is applied on the way out, so eta * t_max much above ~30 overflows.
 import numpy as np
 
 __all__ = ['separate', 'separate_field', 'separate_time_domain',
+           'separate_time_domain_field',
            'backpropagate', 'bar_interface', 'specimen_response',
            'conditioning', 'single_wave_window', 'wavefront_time']
 
@@ -380,7 +381,7 @@ def separate_field(t, signals, positions, c0, eta, x, n_fft=None,
     return out_p, out_m, t_out
 
 
-def separate_time_domain(t, signals, positions, c0):
+def separate_time_domain(t, signals, positions, c0, arrival_frac=0.02):
     """
     Two-gauge wave separation, done as a shift in TIME rather than a phase in
     frequency -- exact for a lossless, non-dispersive bar (c_p = c0,
@@ -435,6 +436,11 @@ def separate_time_domain(t, signals, positions, c0):
         must be > 0 and distinct.
     c0 : float
         Elastic bar wave speed.
+    arrival_frac : float
+        Fraction of a gauge's own peak that counts as its first arrival, for
+        the quiescent lead-in check. See `_time_domain_pm`; the default suits
+        a clean calibration shot, a noisier real one may need it raised to
+        `[<case>.trim].threshold`.
 
     Returns
     -------
@@ -461,6 +467,37 @@ def separate_time_domain(t, signals, positions, c0):
     Fractional-sample shifts (tau and x1/c0 are rarely whole multiples of dt)
     are done by linear interpolation throughout, which is where the ~3e-2 max
     error above comes from -- concentrated at the steep wavefront edge.
+    """
+    P1, M1, x1, t = _time_domain_pm(t, signals, positions, c0, arrival_frac)
+    c0 = float(c0)
+    eps_plus = np.interp(t + x1 / c0, t, P1, left=0.0, right=P1[-1])
+    eps_minus = np.interp(t - x1 / c0, t, M1, left=0.0, right=M1[-1])
+    return eps_plus, eps_minus
+
+
+def _time_domain_pm(t, signals, positions, c0, arrival_frac=0.02):
+    """
+    Shared core of `separate_time_domain` and `separate_time_domain_field`:
+    the causal recursion, stopping one step short of shifting to a station.
+
+    Returns P1, M1 -- the two waves AS SEEN AT GAUGE 1 (nearer the interface),
+    in that function's own notation -- plus x1, gauge 1's distance from the
+    interface, and t itself (as an array, for callers that only had a list).
+    Propagating to any station x (0 for the interface, or any other local
+    coordinate) is then just `interp(t +/- (x1 - x) / c0, t, P1 or M1, ...)`,
+    which is all `separate_time_domain` does and all
+    `separate_time_domain_field` does at more than one x.
+
+    `arrival_frac` is the fraction of a gauge's own peak that counts as its
+    first arrival, for the quiescent lead-in check below. The default, 0.02,
+    is fine on a clean calibration shot; on a noisier real record a single
+    early sample can sit just above 2 % of peak from pickup rather than the
+    wavefront (measured on data/SHTB_PC_2026-09-03.txt: gauge 0 crosses 2 % at
+    54 us on nothing but noise, and does not cross 5 % until 1169 us, ~1.1 ms
+    later) and this needs raising to match. `[<case>.trim].threshold` in
+    config.toml is the same "fraction of own peak" quantity, already tuned per
+    case to find the real arrival for the trim -- callers reconstructing a
+    real shot should pass that, not leave the default.
     """
     t = np.asarray(t, float)
     sig = [np.asarray(s, float) for s in signals]
@@ -492,7 +529,7 @@ def separate_time_domain(t, signals, positions, c0):
     # fraction of that gauge's own peak. Same idea as identify_bar_tension.py's
     # _rise_index, kept deliberately simple -- this only has to catch "not
     # enough lead-in", not time an edge precisely.
-    thresh = 0.02
+    thresh = float(arrival_frac)
     hit1 = np.abs(e1) > thresh * np.abs(e1).max()
     hit2 = np.abs(e2) > thresh * np.abs(e2).max()
     i_arrival = int(min(np.argmax(hit1) if hit1.any() else n,
@@ -530,10 +567,55 @@ def separate_time_domain(t, signals, positions, c0):
             p_lag = (1.0 - frac) * P1[k] + frac * P1[min(k + 1, i - 1)]
         P1[i] = p_lag + drive[i]
     M1 = e1 - P1
+    return P1, M1, x1, t
 
-    eps_plus = np.interp(t + x1 / c0, t, P1, left=0.0, right=P1[-1])
-    eps_minus = np.interp(t - x1 / c0, t, M1, left=0.0, right=M1[-1])
-    return eps_plus, eps_minus
+
+def separate_time_domain_field(t, signals, positions, c0, x, arrival_frac=0.02):
+    """
+    `separate_time_domain`, evaluated at many stations instead of just x = 0 --
+    the time-domain analogue of `separate_field`, for the same reason: a
+    slider that moves the reconstruction plane off the interface needs the
+    field, not just its value there.
+
+    Propagating a pure travelling wave is a time shift and nothing else, so
+    unlike `separate_field` this needs no frequency-domain round trip: with
+    P1, M1 the two waves as seen at gauge 1 (distance x1 from the interface,
+    see `_time_domain_pm`), the wave at any local station `x` (0 = interface,
+    positive INTO the bar, same convention as `separate_field`) is just
+
+        eps_plus(x, t)  = P1(t + (x1 - x) / c0)
+        eps_minus(x, t) = M1(t - (x1 - x) / c0)
+
+    which reduces to `separate_time_domain`'s own x1/c0 shifts at x = 0.
+    Exact for a lossless, non-dispersive bar, and nothing else -- see
+    `separate_time_domain` for what that costs (quiescent lead-in, edge loss).
+
+    Parameters
+    ----------
+    t, signals, positions, c0
+        Exactly as for `separate_time_domain` -- two gauges only.
+    x : float or (n_x,) array
+        Where to reconstruct, in this bar's local coordinate. Unrestricted,
+        exactly as in `separate_field`; reconstructing outside the uniform bar
+        (or past the other gauge) is extrapolation.
+    arrival_frac : float
+        As for `separate_time_domain`.
+
+    Returns
+    -------
+    eps_plus, eps_minus : (n_x, N) arrays
+        One row per station in `x`.
+    """
+    P1, M1, x1, t = _time_domain_pm(t, signals, positions, c0, arrival_frac)
+    c0 = float(c0)
+    xs = np.atleast_1d(np.asarray(x, float))
+    out_p = np.empty((len(xs), len(t)))
+    out_m = np.empty((len(xs), len(t)))
+    for i, xv in enumerate(xs):
+        shift = (x1 - xv) / c0
+        out_p[i] = np.interp(t + shift, t, P1, left=0.0, right=P1[-1])
+        out_m[i] = np.interp(t - shift, t, M1, left=0.0, right=M1[-1])
+    return out_p, out_m
 
 
 def backpropagate(t, signal, position, c0, eta=0.0, n_fft=None, dispersion=None,

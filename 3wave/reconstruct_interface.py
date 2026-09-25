@@ -107,7 +107,7 @@ _ap.add_argument('--no-dispersion', action='store_true',
 HEADLESS, ARGS = plotting.init(parser=_ap)
 
 import config
-from wave_separation import separate, wavefront_time
+from wave_separation import separate, separate_field, wavefront_time
 
 IDENT_FILE = 'bar_identified.npz'
 
@@ -651,13 +651,31 @@ for col, bname in enumerate(COLS):
 
     # --- F = P+M at that bar's own face ------------------------------------
     ax1 = axes[1, col]
+    line_p = line_m = line_F = None
+    if col == 0:
+        # The travelling waves themselves, identified positions only -- the
+        # tape set is not worth a second pair of traces here, and the point
+        # of this panel is F; P and M are context for how F was built.
+        if pnl['primary']:
+            _p0, _m0 = RES[SETS[0][0]]['p'], RES[SETS[0][0]]['m']
+            _gc0, _gdisp = c0, DISP
+        else:
+            _p0, _m0 = p_o, m_o
+            _gc0, _gdisp = c0_o, DISP_o
+        line_p, = ax1.plot(tt_f, _p0 * SCALE, lw=.8, color=BLUE, alpha=.6,
+                           label='$P$')
+        line_m, = ax1.plot(tt_f, _m0 * SCALE, lw=.8, color=ORANGE, alpha=.6,
+                           label='$M$')
     if pnl['primary']:
         for (name, _), col_c, ls in zip(SETS, (INK, BLUE), ('-', '--')):
-            ax1.plot(tt_f, RES[name]['F'] * SCALE, color=col_c, lw=1.0,
-                     ls=ls, label=f'$F = P + M$, {name} positions')
+            (_line,) = ax1.plot(tt_f, RES[name]['F'] * SCALE, color=col_c,
+                                lw=1.0, ls=ls,
+                                label=f'$F = P + M$, {name} positions')
+            if col == 0 and name == SETS[0][0]:
+                line_F = _line
     else:
-        ax1.plot(tt_f, pnl['F'] * SCALE, color=INK, lw=1.0,
-                 label='$F = P + M$, identified positions')
+        (line_F,) = ax1.plot(tt_f, pnl['F'] * SCALE, color=INK, lw=1.0,
+                             label='$F = P + M$, identified positions')
     ax1.axhline(0, color=GRID, lw=1.0)
     band = 0.03 * r['amp'] * SCALE
     ax1.axhspan(-band, band, color=BLUE, alpha=.15,
@@ -690,6 +708,10 @@ for col, bname in enumerate(COLS):
     ax1.set_ylabel(f'Interface force ({UNITS})')
     ax1.set_title(title, loc='left', fontsize=10)
     ax1.legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
+    if col == 0:
+        LEFT = dict(ax=ax1, bar=bname, line_p=line_p, line_m=line_m,
+                    line_F=line_F, title_base=title, sig=pnl['sig'],
+                    x=pnl['x'], c0=_gc0, att=pnl['att'], disp=_gdisp)
 
 # --- bottom left: force equilibrium across the interface -------------------
 # Two INDEPENDENT solves of one quantity -- separate gauges, separate solves,
@@ -697,26 +719,103 @@ for col, bname in enumerate(COLS):
 # the honest error bar on the whole reconstruction. Identical panel to
 # identify_bar_tension.py's, and neither curve is shifted: the two faces are a
 # specimen apart.
+#
+# EQ holds the handles the slider below needs to keep this panel in sync: it
+# always carries BOTH bars, and the slider always moves LEFT['bar']'s own
+# reconstruction, so this is never a bystander to it -- whichever column it
+# actually renders in.
+EQ = None
 if EQ_COLI is not None:
     axeq = axes[2, EQ_COLI]
     # Coloured and differenced by BAR NAME, not by which one --bar happened to
     # make primary, so the panel reads the same way whichever was picked.
+    _eq_lines = {}
     for _b, _c in (('in', BLUE), ('out', ORANGE)):
-        axeq.plot(tt_f, F_BY[_b] * SCALE, lw=1.0, color=_c,
-                  label=f'$F_{{{_b}}}$ at the {_b}put-bar / specimen face')
-    axeq.plot(tt_f, (F_BY['in'] - F_BY['out']) * SCALE, color=INK, lw=1.1,
-              label='$F_{in} - F_{out}$ (should be 0)')
+        (_eq_lines[_b],) = axeq.plot(
+            tt_f, F_BY[_b] * SCALE, lw=1.0, color=_c,
+            label=f'$F_{{{_b}}}$ at the {_b}put-bar / specimen face')
+    (_eq_diff,) = axeq.plot(tt_f, (F_BY['in'] - F_BY['out']) * SCALE,
+                            color=INK, lw=1.1,
+                            label='$F_{in} - F_{out}$ (should be 0)')
     axeq.axhline(0, color=GRID, lw=1.0)
     axeq.axvspan(tt_f[_win.start], tt_f[min(_win.stop, N - 1)], color=GRID,
                  alpha=.35, label='mean/max window')
     axeq.set_xlabel('Time (us)')
     axeq.set_ylabel(f'Interface force ({UNITS})')
-    axeq.set_title(
-        'Force equilibrium across the specimen — two independent solves of '
-        f'one force:\nmean {equilibrium[_win].mean():.2e}, max '
-        f'{equilibrium[_win].max():.2e} of peak $|F_{{{BAR}}}|$  (the two '
-        'faces are a specimen apart, unshifted)', loc='left', fontsize=10)
+
+    def _eq_title(mean, max_, sfx='', shifted=', unshifted'):
+        return ('Force equilibrium across the specimen — two independent '
+               f'solves of one force:\nmean {mean:.2e}, max {max_:.2e} of '
+               f'peak $|F_{{{BAR}}}|${sfx}  (the two faces are a specimen '
+               f'apart{shifted})')
+
+    axeq.set_title(_eq_title(equilibrium[_win].mean(), equilibrium[_win].max()),
+                   loc='left', fontsize=10)
     axeq.legend(frameon=False, fontsize=9, labelcolor=MUTED, loc='lower left')
+    EQ = dict(ax=axeq, line_in=_eq_lines['in'], line_out=_eq_lines['out'],
+              line_diff=_eq_diff, title_fn=_eq_title)
+
+# --- reconstruction-location slider, left column ----------------------------
+# Same solve as the P/M/F traces above, just evaluated off the interface
+# instead of AT it. `separate_field` is the field version of `separate`'s
+# normal-equations solve -- exact for a lossless bar, and consistent with
+# `separate` when attenuation/dispersion are given -- so x = 0 here
+# reproduces the static P/M/F lines exactly, and the slider is a continuous
+# extension of them rather than a different calculation.
+#
+# -200/+50 mm: positive is INTO the bar (away from the specimen, per
+# separate_field's own convention); negative walks back past the interface,
+# towards and through where the specimen sits, which is EXTRAPOLATION -- this
+# bar's identified c0/attenuation/dispersion no longer describe that material,
+# so a large negative reading is a "what would this bar's model predict
+# there", not a measurement.
+from matplotlib.widgets import Slider
+
+_sax = LEFT['ax'].inset_axes((0.60, 0.88, 0.38, 0.07))
+_sax.set_facecolor(SURFACE)
+_slider = Slider(_sax, 'x off interface (mm)', -200.0, 50.0, valinit=0.0,
+                 valstep=1.0, color=BLUE)
+_slider.label.set_fontsize(8); _slider.label.set_color(MUTED)
+_slider.valtext.set_fontsize(8); _slider.valtext.set_color(MUTED)
+
+
+def _on_offset(val):
+    delta = float(val)
+    p_f, m_f, _ = separate_field(t, LEFT['sig'], LEFT['x'], LEFT['c0'], eta,
+                                 [delta], dispersion=LEFT['disp'],
+                                 attenuation=LEFT['att'])
+    p1, m1 = p_f[0], m_f[0]
+    F1 = p1 + m1
+    LEFT['line_p'].set_ydata(p1 * SCALE)
+    LEFT['line_m'].set_ydata(m1 * SCALE)
+    LEFT['line_F'].set_ydata(F1 * SCALE)
+    where = 'into the bar' if delta > 0 else 'towards/through the specimen'
+    suffix = f'  [{delta:+.0f} mm off the interface, {where}]' if delta else ''
+    LEFT['ax'].set_title(LEFT['title_base'] + suffix, loc='left', fontsize=10)
+
+    if EQ is not None:
+        # The other bar is still solved AT the interface; LEFT['bar']'s own
+        # face has moved by delta, so what this panel now shows is force
+        # equilibrium between the TRUE interface and a plane delta away from
+        # it -- not the original, on-interface check -- and the title says so.
+        new = dict(F_BY)
+        new[LEFT['bar']] = F1
+        diff = new['in'] - new['out']
+        EQ['line_in'].set_ydata(new['in'] * SCALE)
+        EQ['line_out'].set_ydata(new['out'] * SCALE)
+        EQ['line_diff'].set_ydata(diff * SCALE)
+        eq_frac = np.abs(diff) / (_peak_eq if _peak_eq > 0 else 1.0)
+        eq_sfx = ('' if delta == 0 else
+                 f', {LEFT["bar"]} face {delta:+.0f} mm off the interface')
+        eq_shifted = ', unshifted' if delta == 0 else ''
+        EQ['ax'].set_title(EQ['title_fn'](eq_frac[_win].mean(),
+                                          eq_frac[_win].max(), eq_sfx,
+                                          eq_shifted),
+                           loc='left', fontsize=10)
+    fig.canvas.draw_idle()
+
+
+_slider.on_changed(_on_offset)
 
 # --- bottom right: the free-end null ---------------------------------------
 # The same record reconstructed at BAR's own far FREE surface instead of at the
